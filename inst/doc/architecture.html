@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>FocusGroup Architecture</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">FocusGroup Architecture</h1>
+
+
+
+<div id="architecture" class="section level1">
+<h1>Architecture</h1>
+<p>FocusGroup supports the design and examination of moderated
+discussions before fieldwork. Researchers can compare moderator guides,
+participant sources, and speaker-selection rules while retaining one
+transcript format for analysis. A generated transcript describes the
+specified session and does not estimate population attitudes.</p>
+<p>Most studies can begin with <code>run_focus_group()</code>. This
+article explains the underlying objects for researchers who need direct
+construction, offline execution, or custom turn-taking rules.</p>
+<p><code>FGAgent</code> represents a participant or moderator and
+generates that agent’s turns. Its model configuration is stored in the
+<code>config</code> field. <code>ConversationFlow</code> is the base
+class for custom turn-taking rules. <code>FocusGroup</code> advances the
+moderator guide and records each message. LLMR supplies model
+configurations and provider calls.</p>
+<div id="main-functions" class="section level2">
+<h2>Main functions</h2>
+<p><code>run_focus_group()</code> is the single high-level session
+runner. It requires an explicit <code>config</code>, constructs the
+roster and flow, performs a call-count preflight, runs the guide, and
+returns a <code>focus_group_result</code>.</p>
+<p>Its main arguments are consistent with the other package entry
+points:</p>
+<ul>
+<li><code>n_participants</code> is the participant count, excluding the
+moderator.</li>
+<li><code>guide</code> is a named vector or list of phase counts or
+moderator scripts.</li>
+<li><code>flow</code> selects the speaker-selection rule.</li>
+<li><code>message_mode</code> selects role-flipped or flat message
+construction.</li>
+<li><code>config</code> is the model configuration, and
+<code>admin_config</code> is the group-level configuration on direct
+<code>FocusGroup</code> construction.</li>
+<li><code>.runner</code>, when supplied, is an optional function used
+instead of live model calls.</li>
+</ul>
+<p>The package supplies three built-in flow modes:
+<code>&quot;round_robin&quot;</code>, <code>&quot;probabilistic&quot;</code>, and
+<code>&quot;desire_based&quot;</code>. Construct them with
+<code>create_conversation_flow()</code>. Their implementation classes
+are internal. <code>ConversationFlow</code> remains public so packages
+and researchers can define new selection rules.</p>
+<p><code>create_agents()</code>, <code>create_agents_from_data()</code>,
+and <code>create_agents_from_survey()</code> return agent-ID-keyed lists
+that include the moderator <code>MOD</code>. Each requires an explicit
+<code>config</code> because the returned agents can generate model
+output.</p>
+<p><code>focus_group_from_transcript()</code> creates a
+<code>FocusGroup</code> from an existing transcript without generating
+new turns. <code>moderator_id</code> identifies the moderator when
+known. If it is omitted, the importer falls back to finding
+<code>&quot;mod&quot;</code> within a speaker identifier.</p>
+</div>
+<div id="offline-execution-and-replay" class="section level2">
+<h2>Offline execution and replay</h2>
+<p>The <code>.runner</code> argument accepts an optional function for
+offline tests or replay that uses the request and response data-frame
+format used across LLMR. The package calls
+<code>.runner(experiments, ...)</code>, where <code>experiments</code>
+is a data frame with <code>config</code> and <code>messages</code>
+list-columns. The function returns those rows with at least
+<code>response_text</code>; it may also return <code>response_id</code>,
+token counts, <code>success</code>, and related diagnostics.</p>
+<p>The function handles moderator, participant, desire-scoring, and
+summary requests. This format permits an archive replay function to
+execute a full session without a live provider. A configuration remains
+explicit and is recorded with the experiment so readers can see how it
+was run.</p>
+</div>
+<div id="running-a-session" class="section level2">
+<h2>Running a session</h2>
+<p><code>FocusGroup$run_simulation()</code> first records the
+participant roster as a <code>System</code> message. It then reads
+<code>question_script</code> in order. For each entry, the moderator
+generates one message. Question phases call
+<code>select_next_speaker()</code> and collect no more than
+<code>max_participant_responses</code> participant messages. Opening and
+closing phases do not collect participant responses.</p>
+<p>The round-robin mode cycles through participants. The probabilistic
+mode samples from speaking propensities. The desire-based mode asks
+eligible participants for model-produced scores and selects among
+eligible candidates. Provider failures in desire scoring are recorded in
+the message metadata and trigger one message to the user. Selection then
+uses a neutral draw among the candidates; a failure is never recorded as
+a score of zero.</p>
+<p>The loop stops when the script is exhausted, <code>num_rounds</code>
+is reached, or the last closing entry is processed. It stores a final
+summary in <code>final_summary</code>. The summary is not appended to
+<code>conversation_log</code>.</p>
+<p>A <code>FocusGroup</code> object runs once. Calling
+<code>run_simulation()</code> on an object that has already run raises
+an error. Construct a new object for another full session. Use the
+continuation experiment in <code>run_focus_studio()</code> to compare a
+next message under original and edited histories.</p>
+</div>
+<div id="messages-and-prompts" class="section level2">
+<h2>Messages and prompts</h2>
+<p>The default <code>message_mode = &quot;roleflip&quot;</code> presents an
+agent’s prior messages as assistant messages and labels other speakers’
+messages as user messages. <code>message_mode = &quot;flat&quot;</code> places the
+transcript in one user message. The selected mode is recorded with the
+session.</p>
+<p><code>get_default_prompt_templates()</code> returns only templates
+supported by package operations. Pass named replacements through
+<code>prompt_templates</code> in <code>FocusGroup$new()</code>. A custom
+participant template containing <code>{{conversation_history}}</code> or
+<code>{{persona_description}}</code> uses the flat message path.</p>
+</div>
+<div id="stored-data" class="section level2">
+<h2>Stored data</h2>
+<p><code>conversation_log</code> is an ordered list of message records.
+Each record has a unique integer <code>message_id</code>, the moderator
+cycle in <code>round</code>, and <code>phase</code>. Moderator and
+participant messages responding to the same question share a round.
+Response identifiers, finish reasons, token counts, provider and model
+labels, duration, and failure metadata accompany generated messages.</p>
+<p><code>run_focus_group()</code> exposes this log as the
+<code>transcript</code> data frame in its result. A
+<code>focus_group_result</code> always has these fields:</p>
+<ul>
+<li><code>focus_group</code>: the underlying R6 object.</li>
+<li><code>transcript</code>: one row per logged message.</li>
+<li><code>summary</code>: the final model summary.</li>
+<li><code>participants</code>: a data frame describing the roster.</li>
+<li><code>usage</code>: token use in LLMR’s <code>sent</code>,
+<code>rec</code>, and <code>total</code> vocabulary.</li>
+<li><code>metadata</code>: <code>topic</code>, <code>purpose</code>,
+<code>flow</code>, <code>message_mode</code>,
+<code>n_participants</code>, <code>estimated_calls</code>,
+<code>provider</code>, and <code>model</code>, with no credentials.</li>
+</ul>
+<p>The class has a concise print method. <code>FocusGroup</code> also
+has a concise S3 print method for direct R6 objects.</p>
+</div>
+<div id="analysis" class="section level2">
+<h2>Analysis</h2>
+<p><code>FocusGroup$analyze()</code> and the descriptive text methods
+operate on the stored log. <code>analyze_focus_group()</code> collects
+the principal analyses in a <code>focus_group_analysis</code> with these
+returned components: <code>basic_stats</code>, <code>topics</code>,
+<code>tfidf</code>, <code>readability</code>, <code>themes</code>,
+<code>model_summary</code>, <code>plots</code>, and
+<code>issues</code>.</p>
+<p>Missing optional packages and unsuitable data produce empty
+components with consistent columns where the result is tabular, and an
+explanatory row in <code>issues</code>. <code>plots</code> is an empty
+list when ggplot2 is unavailable. Descriptive analyses run offline.
+Thematic analysis and model summaries run only when
+<code>analyze_focus_group()</code> receives an explicit
+<code>config</code>. A requested model analysis that encounters a
+provider failure raises the provider condition.</p>
+</div>
+<div id="extending-the-package" class="section level2">
+<h2>Extending the package</h2>
+<p>To add a turn-taking rule, subclass <code>ConversationFlow</code> and
+implement <code>select_next_speaker()</code>. Override
+<code>update_state_post_selection()</code> when the rule keeps state. An
+extension can construct its class directly; built-in modes remain
+available through <code>create_conversation_flow()</code>.</p>
+<p>See the function and class help pages for argument defaults and
+return values.</p>
+</div>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>

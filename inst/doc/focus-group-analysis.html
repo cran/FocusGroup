@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+<meta name="date" content="2026-09-01" />
+
+<title>Focus Group Analysis</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Focus Group Analysis</h1>
+<h4 class="date">2026-09-01</h4>
+
+
+
+<div id="analyze-simulated-and-imported-transcripts" class="section level1">
+<h1>Analyze simulated and imported transcripts</h1>
+<p>How much did each speaker contribute? Which terms and topics
+distinguished their turns? How did moderator questions organize the
+discussion, and where do readability, recurring themes, or participation
+patterns differ? FocusGroup addresses these questions for simulated
+sessions and imported transcripts.</p>
+<p>Descriptive analysis runs offline. Thematic analysis and model
+summaries are separate, opt-in model tasks. A live session or requested
+model analysis uses LLMR, requires a provider key in its usual
+environment variable, and receives an explicit model configuration.</p>
+<div id="run-a-focus-group" class="section level2">
+<h2>Run a focus group</h2>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a>config <span class="ot">&lt;-</span> LLMR<span class="sc">::</span><span class="fu">llm_config</span>(</span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a>  <span class="at">provider =</span> <span class="st">&quot;openai&quot;</span>,</span>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a>  <span class="at">model =</span> <span class="st">&quot;gpt-4o-mini&quot;</span>,</span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a>  <span class="at">temperature =</span> <span class="fl">0.7</span></span>
+<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a>)</span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">run_focus_group</span>(</span>
+<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a>  <span class="at">topic =</span> <span class="st">&quot;Impact of Social Media on Mental Health&quot;</span>,</span>
+<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a>  <span class="at">n_participants =</span> <span class="dv">5</span>,</span>
+<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>  <span class="at">guide =</span> <span class="fu">c</span>(</span>
+<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a>    <span class="at">Opening =</span> <span class="dv">1</span>,</span>
+<span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a>    <span class="at">Icebreaker =</span> <span class="dv">1</span>,</span>
+<span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a>    <span class="at">Engagement =</span> <span class="dv">2</span>,</span>
+<span id="cb1-14"><a href="#cb1-14" tabindex="-1"></a>    <span class="at">Exploration =</span> <span class="dv">3</span>,</span>
+<span id="cb1-15"><a href="#cb1-15" tabindex="-1"></a>    <span class="at">Closing =</span> <span class="dv">1</span></span>
+<span id="cb1-16"><a href="#cb1-16" tabindex="-1"></a>  ),</span>
+<span id="cb1-17"><a href="#cb1-17" tabindex="-1"></a>  <span class="at">flow =</span> <span class="st">&quot;desire_based&quot;</span>,</span>
+<span id="cb1-18"><a href="#cb1-18" tabindex="-1"></a>  <span class="at">config =</span> config,</span>
+<span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">110</span>,</span>
+<span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>  <span class="at">message_mode =</span> <span class="st">&quot;roleflip&quot;</span></span>
+<span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a>)</span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a></span>
+<span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a><span class="fu">print</span>(result)</span>
+<span id="cb1-24"><a href="#cb1-24" tabindex="-1"></a><span class="fu">print</span>(result<span class="sc">$</span>focus_group)</span></code></pre></div>
+<p>The returned <code>focus_group_result</code> has six returned
+components: <code>focus_group</code>, <code>transcript</code>,
+<code>summary</code>, <code>participants</code>, <code>usage</code>, and
+<code>metadata</code>.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">head</span>(result<span class="sc">$</span>transcript)</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>result<span class="sc">$</span>participants</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>result<span class="sc">$</span>usage</span></code></pre></div>
+<p>Each transcript row has a unique <code>message_id</code>.
+<code>round</code> identifies the moderator cycle, so a moderator
+question and its participant responses share a round. <code>phase</code>
+retains the guide phase. Generated rows also carry provider response
+metadata and token counts.</p>
+</div>
+<div id="run-descriptive-analysis-offline" class="section level2">
+<h2>Run descriptive analysis offline</h2>
+<p><code>analyze_focus_group()</code> runs descriptive analyses without
+a model unless the caller opts in by supplying <code>config</code>.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>analysis <span class="ot">&lt;-</span> <span class="fu">analyze_focus_group</span>(</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>  result,</span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>  <span class="at">num_topics =</span> <span class="dv">4</span>,</span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>  <span class="at">include_plots =</span> <span class="cn">TRUE</span></span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>)</span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a></span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a><span class="fu">print</span>(analysis)</span>
+<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a>analysis<span class="sc">$</span>basic_stats</span>
+<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a>analysis<span class="sc">$</span>tfidf</span>
+<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a>analysis<span class="sc">$</span>readability</span>
+<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a>analysis<span class="sc">$</span>issues</span></code></pre></div>
+<p>The <code>focus_group_analysis</code> returned components are
+<code>basic_stats</code>, <code>topics</code>, <code>tfidf</code>,
+<code>readability</code>, <code>themes</code>,
+<code>model_summary</code>, <code>plots</code>, and <code>issues</code>.
+A component that cannot be computed is an empty component with
+consistent columns where it is tabular. For example, <code>plots</code>
+is an empty list if ggplot2 is unavailable. <code>issues</code>
+identifies an optional analysis that could not run and gives its
+reason.</p>
+<p>Individual descriptive analyses remain available as methods on the
+underlying <code>FocusGroup</code> object:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>readability <span class="ot">&lt;-</span> result<span class="sc">$</span>focus_group<span class="sc">$</span><span class="fu">analyze_readability</span>()</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>participation <span class="ot">&lt;-</span> result<span class="sc">$</span>focus_group<span class="sc">$</span><span class="fu">analyze_participation_balance</span>()</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a>questions <span class="ot">&lt;-</span> result<span class="sc">$</span>focus_group<span class="sc">$</span><span class="fu">analyze_question_patterns</span>()</span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a>readability</span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a>participation<span class="sc">$</span>participation_stats</span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a>questions<span class="sc">$</span>question_patterns</span></code></pre></div>
+</div>
+<div id="opt-in-to-model-analysis" class="section level2">
+<h2>Opt in to model analysis</h2>
+<p>Thematic analysis and model summaries run only when an explicit
+<code>config</code> is passed to <code>analyze_focus_group()</code>.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a>model_analysis <span class="ot">&lt;-</span> <span class="fu">analyze_focus_group</span>(</span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a>  result,</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a>  <span class="at">num_topics =</span> <span class="dv">4</span>,</span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>  <span class="at">config =</span> config</span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>)</span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a><span class="fu">cat</span>(model_analysis<span class="sc">$</span>themes)</span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="fu">cat</span>(model_analysis<span class="sc">$</span>model_summary)</span></code></pre></div>
+<p>If a requested model analysis fails, the provider condition is
+raised. The failure is not converted to a missing field or omitted from
+the result.</p>
+</div>
+<div id="import-and-analyze-an-existing-transcript" class="section level2">
+<h2>Import and analyze an existing transcript</h2>
+<p>Importing a transcript creates no model output. Pass
+<code>moderator_id</code> when the moderator is known. If it is omitted,
+the importer uses the documented substring fallback on speaker
+identifiers.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>transcript <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>  <span class="at">speaker =</span> <span class="fu">c</span>(<span class="st">&quot;Facilitator&quot;</span>, <span class="st">&quot;Ana&quot;</span>, <span class="st">&quot;Ben&quot;</span>, <span class="st">&quot;Ana&quot;</span>),</span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>  <span class="at">text =</span> <span class="fu">c</span>(</span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>    <span class="st">&quot;What should change about the library hours?&quot;</span>,</span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a>    <span class="st">&quot;Evening hours help working parents.&quot;</span>,</span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a>    <span class="st">&quot;Morning crowding has become difficult.&quot;</span>,</span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a>    <span class="st">&quot;Both schedules need enough staff.&quot;</span></span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a>  )</span>
+<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a>)</span>
+<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a></span>
+<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a>imported <span class="ot">&lt;-</span> <span class="fu">focus_group_from_transcript</span>(</span>
+<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a>  transcript,</span>
+<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a>  <span class="at">topic =</span> <span class="st">&quot;Library hours&quot;</span>,</span>
+<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;Facilitator&quot;</span></span>
+<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a>)</span>
+<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a></span>
+<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a>imported_analysis <span class="ot">&lt;-</span> <span class="fu">analyze_focus_group</span>(imported, <span class="at">include_plots =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="fu">print</span>(imported_analysis)</span></code></pre></div>
+</div>
+<div id="construct-the-objects-directly" class="section level2">
+<h2>Construct the objects directly</h2>
+<p>The R6 interface exposes the parts assembled by
+<code>run_focus_group()</code>.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>agents <span class="ot">&lt;-</span> <span class="fu">create_agents</span>(</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>  <span class="at">n_participants =</span> <span class="dv">3</span>,</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>  <span class="at">demographics =</span> <span class="fu">data.frame</span>(</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>    <span class="at">age =</span> <span class="fu">c</span>(<span class="dv">25</span>, <span class="dv">35</span>, <span class="dv">45</span>),</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>    <span class="at">gender =</span> <span class="fu">c</span>(<span class="st">&quot;male&quot;</span>, <span class="st">&quot;female&quot;</span>, <span class="st">&quot;non-binary&quot;</span>),</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>    <span class="at">education =</span> <span class="fu">c</span>(<span class="st">&quot;high school&quot;</span>, <span class="st">&quot;bachelor&#39;s&quot;</span>, <span class="st">&quot;master&#39;s&quot;</span>),</span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a>    <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span></span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a>  ),</span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a>  <span class="at">config =</span> config</span>
+<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a>)</span>
+<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a></span>
+<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a>flow <span class="ot">&lt;-</span> <span class="fu">create_conversation_flow</span>(</span>
+<span id="cb7-13"><a href="#cb7-13" tabindex="-1"></a>  <span class="at">mode =</span> <span class="st">&quot;desire_based&quot;</span>,</span>
+<span id="cb7-14"><a href="#cb7-14" tabindex="-1"></a>  <span class="at">agents =</span> agents,</span>
+<span id="cb7-15"><a href="#cb7-15" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;MOD&quot;</span></span>
+<span id="cb7-16"><a href="#cb7-16" tabindex="-1"></a>)</span>
+<span id="cb7-17"><a href="#cb7-17" tabindex="-1"></a></span>
+<span id="cb7-18"><a href="#cb7-18" tabindex="-1"></a>fg <span class="ot">&lt;-</span> FocusGroup<span class="sc">$</span><span class="fu">new</span>(</span>
+<span id="cb7-19"><a href="#cb7-19" tabindex="-1"></a>  <span class="at">topic =</span> <span class="st">&quot;Impact of Social Media on Mental Health&quot;</span>,</span>
+<span id="cb7-20"><a href="#cb7-20" tabindex="-1"></a>  <span class="at">purpose =</span> <span class="st">&quot;Explore perspectives and experiences related to social media.&quot;</span>,</span>
+<span id="cb7-21"><a href="#cb7-21" tabindex="-1"></a>  <span class="at">agents =</span> agents,</span>
+<span id="cb7-22"><a href="#cb7-22" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;MOD&quot;</span>,</span>
+<span id="cb7-23"><a href="#cb7-23" tabindex="-1"></a>  <span class="at">turn_taking_flow =</span> flow,</span>
+<span id="cb7-24"><a href="#cb7-24" tabindex="-1"></a>  <span class="at">admin_config =</span> config</span>
+<span id="cb7-25"><a href="#cb7-25" tabindex="-1"></a>)</span></code></pre></div>
+<p>Built-in flows are available only through
+<code>create_conversation_flow()</code>. <code>ConversationFlow</code>
+is the base class for custom turn-taking rules.</p>
+</div>
+<div id="interpretation" class="section level2">
+<h2>Interpretation</h2>
+<p>A generated transcript is evidence about the specified simulation,
+not about a population. Analysis should retain the guide, participant
+records, model configuration, and message construction recorded with the
+result.</p>
+</div>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>
