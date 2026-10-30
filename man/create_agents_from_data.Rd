@@ -11,6 +11,8 @@ create_agents_from_data(
   demographic_cols = NULL,
   rows = NULL,
   weights = NULL,
+  na_strings = fg_default_na_strings(),
+  scale_template = .fg_default_scale_template,
   .runner = NULL
 )
 }
@@ -19,41 +21,103 @@ create_agents_from_data(
 
 \item{n_participants}{Integer number of participants (excludes the moderator).}
 
-\item{config}{An explicit `LLMR::llm_config` for all agents.}
+\item{config}{An explicit \code{LLMR::llm_config} for all agents.}
 
 \item{demographic_cols}{Character vector of columns to render as demographics.
-Defaults to the `data`'s `"demographic_fields"` attribute when present, else
-a small set of common demographic column names found in `data`.}
+Defaults to the \code{data}'s \code{"demographic_fields"} attribute when present, else
+a small set of common demographic column names found in \code{data}.}
 
-\item{rows, weights}{See [create_agents_from_survey()].}
+\item{rows, weights}{See \code{\link[=create_agents_from_survey]{create_agents_from_survey()}}. Here \code{rows} refers to
+the rows of \code{data}, and a predicate receives the demographics frame with
+its columns relabeled as they appear in the personas and holding the
+text rendered for each field. Integer positions are kept in the order
+given.}
+
+\item{na_strings}{Character vector of regular expressions, matched ignoring
+case, that mark a text or factor value, or a value label, as missing, as
+in \code{\link[=create_agents_from_survey]{create_agents_from_survey()}}. The default is
+\code{\link[=fg_default_na_strings]{fg_default_na_strings()}}; \code{character()} leaves out only \code{NA} and empty
+values.}
+
+\item{scale_template}{The sentence that states an answer on a scale whose
+endpoints alone are labeled, for columns with value labels; see
+\code{\link[=create_agents_from_survey]{create_agents_from_survey()}}. Templates are named by column.}
 
 \item{.runner}{Optional function used instead of live model calls and stored
 on every agent.}
 }
 \value{
-A named list of `FGAgent` objects (participants + moderator), keyed
-  by agent ID.
+A named list of \code{FGAgent} objects (participants + moderator), keyed
+by agent ID, with the \code{source_rows} and \code{source_ids} attributes described
+in \code{\link[=create_agents_from_survey]{create_agents_from_survey()}}; here the positions refer to the rows of
+\code{data}. Unless the frame is a pre-rendered persona panel, the list also
+carries a \code{rendering_report} attribute recording, for each participant
+and column, the value shown or that it was missing; see
+\code{\link[=persona_rendering_report]{persona_rendering_report()}}.
 }
 \description{
-Like [create_agents_from_survey()] but starting from a data frame already in
-memory (for example `LLMR::anes_2024_personas`). Demographic columns are
+Like \code{\link[=create_agents_from_survey]{create_agents_from_survey()}} but starting from a data frame already in
+memory (for example \link{anes_2024_personas}). Demographic columns are
 rendered as background; the remaining columns are rendered as survey responses,
-keyed by their question wording when the frame carries a `dictionary` attribute
-(see [LLMR::llm_persona_split()]), else by their column names. Values are taken
-as-is (decode and clean them first if they are still coded).
+keyed by their question wording when the frame carries a \code{dictionary} attribute
+(see \code{\link[LLMR:llm_persona_split]{LLMR::llm_persona_split()}}), else by their column names. A frame
+taken from \link{anes_2024_personas} by base subsetting (\code{[}, \code{\link[=subset]{subset()}}),
+which drops the attributes, has its dictionary and demographic fields
+restored from the package's copy when every column is one of the
+dataset's, with a message. Columns whose
+names identify respondents (\code{id}, \code{caseid}, \code{respondent_id}, \code{respid},
+\code{persona_id}, \code{uid}, \code{record_id}, \code{row_id}, \code{ResponseId},
+\code{participant_id}, \code{subject_id}, \code{user_id}, \code{PROLIFIC_PID}, \code{workerId},
+\code{caseno}, or \code{QKEY}, in any case and with or without spaces or
+punctuation, as in \code{ID}, \code{CaseID}, or \code{resp_id}) are not rendered: they are kept in the \code{source_ids} attribute
+and listed in the rendering report as dropped. The same holds for those
+columns in a data frame given to \code{\link[=create_agents]{create_agents()}}.
 }
 \details{
-A frame of class `silicon_panel`, or a frame with both `persona` and
-`persona_id` columns, is treated as a pre-rendered persona panel. Its
-`persona` text becomes each participant's direct persona description;
-`persona` and `persona_id` are not rendered as survey answers. This bridge
+Values are rendered according to their column:
+\itemize{
+\item A column with value labels (class \code{haven_labelled}, as
+\code{\link[haven:read_dta]{haven::read_dta()}} and \code{\link[haven:read_spss]{haven::read_sav()}} return them) is rendered by
+the rules described under Rendering answers in
+\code{\link[=create_agents_from_survey]{create_agents_from_survey()}}: a code is shown as its label; a number
+between the labeled endpoints of a scale is shown in the sentence of
+\code{scale_template}; a missing-data label and a negative code without a
+label are left out; and a field that holds numbers is shown
+as numbers. The same warnings are given, and the answers read as they
+do when the same data are read from a file by
+\code{\link[=create_agents_from_survey]{create_agents_from_survey()}}. SPSS user-defined missing values, which
+\code{\link[haven:read_spss]{haven::read_sav()}} keeps with \code{user_na = TRUE}, are left out.
+\item Text and factor values are shown as given, except missing-data labels,
+decided by the rule that decides value labels (see Rendering answers in
+\code{\link[=create_agents_from_survey]{create_agents_from_survey()}}). A value is one when it matches
+\code{na_strings} and starts with a negative code or one of 90 and above
+("-9. Refused", "[-9] Refused" as \code{\link[haven:as_factor]{haven::as_factor()}} writes it with
+\code{levels = "both"}, "97. Refused"), or when it says nothing but the
+matched wording ("Refused to answer", "I don't know", "Don't know
+(VOL)"). Answers that use such words ("I keep missing the bus", "My
+landlord refused to fix the heat", "2. Refused to take sides") are
+kept.
+\item Numbers are shown in full ("100000"); \code{na_strings} does not apply to them.
+}
+
+Every value left out is recorded in the rendering report with its reason,
+and those left out as missing-data labels or codes are announced in a
+message naming the columns. An \code{NA} is left out without a message.
+
+A frame of class \code{silicon_panel}, or a frame with both \code{persona} and
+\code{persona_id} columns, is treated as a pre-rendered persona panel. Its
+\code{persona} text becomes each participant's direct persona description;
+\code{persona} and \code{persona_id} are not rendered as survey answers. This bridge
 uses the frame's structure and does not require LLMRpanel.
+
+Sampling and the validation of \code{weights} follow
+\code{\link[=create_agents_from_survey]{create_agents_from_survey()}}.
 }
 \examples{
 cfg <- LLMR::llm_config("groq", "openai/gpt-oss-20b",
                         api_key = LLMR::llm_api_key_env("GROQ_API_KEY"))
 agents <- create_agents_from_data(
-  LLMR::anes_2024_personas, n_participants = 6, config = cfg
+  anes_2024_personas, n_participants = 6, config = cfg
 )
 agents$P1$persona_description
 }

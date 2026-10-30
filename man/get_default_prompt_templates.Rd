@@ -8,34 +8,62 @@ get_default_prompt_templates()
 }
 \value{
 A named list where each element is a character string representing a prompt template.
-        Placeholders like `\{\{topic\}\}`, `\{\{persona_description\}\}`, etc., are used within
-        the templates and will be filled dynamically during the simulation.
+Placeholders like \verb{\\\{\\\{topic\\\}\\\}}, \verb{\\\{\\\{persona_description\\\}\\\}}, etc., are used within
+the templates and will be filled dynamically during the simulation.
 }
 \description{
-Retrieves a list containing the default prompt templates used by the `FocusGroup` package.
+Retrieves a list containing the default prompt templates used by the \code{FocusGroup} package.
 These templates guide the behavior of LLM agents (participants and moderator) during
 different phases and actions within the simulation.
 }
 \details{
 Users can retrieve this list, modify specific templates, and then pass the modified list
-to `FocusGroup$new()` or higher-level wrapper functions to customize the simulation's prompts.
+to \code{FocusGroup$new()} or higher-level wrapper functions to customize the simulation's prompts.
 }
 \section{Participant templates and message construction}{
 
 Two participant templates ship here, and which one is used depends on the
-message construction (see the `message_mode` argument of
-[run_focus_group()], or `options(focusgroup.message_mode=)`).
+message construction (see the \code{message_mode} argument of
+\code{\link[=run_focus_group]{run_focus_group()}}, or \code{options(focusgroup.message_mode=)}).
 \itemize{
-  \item `participant_turn_instruction` is the canonical template for the
-    default role-flipped construction. It carries only the current question and
-    the turn cue, because the persona, standing rules, and the transcript are
-    supplied structurally (a system message plus role-separated turns).
-  \item `participant_utterance_subtle_persona` is the flat template. It
-    inlines the persona and the whole
-    transcript into one user message. A custom template that contains
-    `\{\{conversation_history\}\}` or `\{\{persona_description\}\}` is treated as a
-    flat template and routed through the flat path.
+\item \code{participant_turn_instruction} is the canonical template for the
+default role-flipped construction. It carries only the current question and
+the turn cue, because the persona, standing rules, and the transcript are
+supplied structurally (a system message plus role-separated turns).
+\item \code{participant_utterance_subtle_persona} is the flat template. It
+inlines the persona and the whole
+transcript into one user message, which for a participant in a
+session opens with the sentence that tells it its handle ("In this
+discussion you are P3."). A custom template that contains
+\verb{\\\{\\\{conversation_history\\\}\\\}} or \verb{\\\{\\\{persona_description\\\}\\\}} is treated as a
+flat template and routed through the flat path.
 }
+}
+
+\section{Probe templates}{
+
+\code{participant_probe_instruction} closes the messages of a private probe
+(\code{\link[=fg_probe]{fg_probe()}}); \verb{\\\{\\\{probe_question\\\}\\\}} is replaced by the question.
+\code{participant_probe_reask} follows an answer to a probe with a \code{scale}
+from which no number could be read, in the same private exchange; its
+placeholders are \verb{\\\{\\\{lo\\\}\\\}} and \verb{\\\{\\\{hi\\\}\\\}}, the ends of the
+scale, and \verb{\\\{\\\{probe_question\\\}\\\}}.
+}
+
+\section{Summary templates}{
+
+\code{summary_participant}, \code{summary_item}, \code{summary_disagreements},
+\code{summary_trajectory}, \code{summary_turn}, and \code{summary_session} are the prompts
+of \code{\link[=summarize_focus_group]{summarize_focus_group()}}, one per unit, and \code{summary_reask} is the
+message that returns a failing reply with its failures. Their placeholders
+are \verb{\\\{\\\{topic\\\}\\\}}, \verb{\\\{\\\{unit\\\}\\\}}, \verb{\\\{\\\{roster\\\}\\\}} (speakers and
+message counts, computed in code), \verb{\\\{\\\{transcript\\\}\\\}},
+\verb{\\\{\\\{probes\\\}\\\}} (empty unless probe answers are included),
+\verb{\\\{\\\{stages\\\}\\\}} (trajectory only), \verb{\\\{\\\{format\\\}\\\}} (the JSON shape the
+reply must take), and, in \code{summary_reask}, \verb{\\\{\\\{failures\\\}\\\}}. They are
+read by \code{\link[=summarize_focus_group]{summarize_focus_group()}} alone; changing them in a session's
+\code{prompt_templates} has no effect, and the \code{templates} argument of
+\code{\link[=summarize_focus_group]{summarize_focus_group()}} replaces them.
 }
 
 \examples{

@@ -5,22 +5,27 @@
 \title{ConversationFlow Base Class}
 \value{
 An R6 generator meant for subclassing; instances are built by
-  [create_conversation_flow()], which returns a `ConversationFlow`
-  subclass object ready for [FocusGroup].
+\code{\link[=create_conversation_flow]{create_conversation_flow()}}, which returns a \code{ConversationFlow}
+subclass object ready for \link{FocusGroup}.
 }
 \description{
-`ConversationFlow` is an R6 base class defining the interface for turn-taking
+\code{ConversationFlow} is an R6 base class defining the interface for turn-taking
 mechanisms in a focus group simulation. Subclasses implement specific strategies
 for selecting the next speaker.
 }
 \section{Methods for Subclassing}{
 
 \describe{
-  \item{`initialize(agents, moderator_id)`}{Sets up the flow. Call `super$initialize(agents, moderator_id)`.}
-  \item{`select_next_speaker(focus_group)`}{*Required*. Logic to choose the next `FGAgent` to speak.
-    Should return the agent object or `NULL`.}
-  \item{`update_state_post_selection(speaker_id, focus_group)`}{Optional. Updates internal state
-    after a speaker has spoken. Base implementation updates `self$last_speaker_id`.}
+\item{\code{initialize(agents, moderator_id)}}{Sets up the flow. Call \code{super$initialize(agents, moderator_id)}.}
+\item{\code{select_next_speaker(focus_group)}}{\emph{Required}. Logic to choose the next \code{FGAgent} to speak.
+Should return the agent object or \code{NULL}.}
+\item{\code{update_state_post_selection(speaker_id, focus_group)}}{Optional. Updates internal state
+after a speaker has spoken. Base implementation updates \code{self$last_speaker_id}.}
+\item{\code{note_moderator_turn()}}{Optional. Called after every moderator
+line: a guide item, a call-on line, or an injected moderator message.
+Base implementation clears \code{self$last_speaker_id}, so that a flow that
+passes over the previous speaker bars only back-to-back participant
+turns.}
 }
 }
 
@@ -35,16 +40,24 @@ RandomFlow <- R6::R6Class("RandomFlow", inherit = ConversationFlow,
 \section{Public fields}{
 \if{html}{\out{<div class="r6-fields">}}
 \describe{
-\item{\code{agents}}{A named list of `FGAgent` objects participating in the conversation.}
+\item{\code{agents}}{A named list of \code{FGAgent} objects participating in the conversation.}
 
 \item{\code{participant_ids}}{A character vector of agent identifiers, excluding the moderator.}
 
 \item{\code{moderator_id}}{Character. The ID of the moderator agent.}
 
-\item{\code{last_speaker_id}}{The ID of the agent who last spoke. Can be `NULL`.}
+\item{\code{last_speaker_id}}{The ID of the agent who last spoke. Can be \code{NULL}.}
 
-\item{\code{selection_metadata}}{Details recorded for the latest selection.
-Desire-scoring failures record the condition and neutral fallback here.}
+\item{\code{selection_metadata}}{Details recorded for the latest selection when
+it departs from the flow's usual rule, such as a lowered desire threshold
+or, under \code{on_desire_failure = "random"}, a desire-scoring failure.}
+
+\item{\code{routing_record}}{The record of the latest selection, whatever rule
+made it: a list with \code{flow}, \code{rule}, \code{candidates}, \code{excluded} (a named
+character vector giving the reason each excluded participant was passed
+over), \code{scores}, \code{threshold}, \code{tied}, \code{tie_break}, and \code{selected_id}. A
+running session copies it into its routing record after every pick. A
+subclass that does not set it is recorded with rule \code{"custom"}.}
 }
 \if{html}{\out{</div>}}
 }
@@ -54,6 +67,7 @@ Desire-scoring failures record the condition and neutral fallback here.}
 \item \href{#method-ConversationFlow-new}{\code{ConversationFlow$new()}}
 \item \href{#method-ConversationFlow-select_next_speaker}{\code{ConversationFlow$select_next_speaker()}}
 \item \href{#method-ConversationFlow-update_state_post_selection}{\code{ConversationFlow$update_state_post_selection()}}
+\item \href{#method-ConversationFlow-note_moderator_turn}{\code{ConversationFlow$note_moderator_turn()}}
 \item \href{#method-ConversationFlow-clone}{\code{ConversationFlow$clone()}}
 }
 }
@@ -69,7 +83,7 @@ Initializes the ConversationFlow object.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{agents}}{A named list of `FGAgent` objects.}
+\item{\code{agents}}{A named list of \code{FGAgent} objects.}
 
 \item{\code{moderator_id}}{Character. The ID of the moderator agent.}
 }
@@ -88,12 +102,12 @@ Selects the next speaker. Must be implemented by subclasses.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{focus_group}}{The `FocusGroup` object managing the simulation, providing context.}
+\item{\code{focus_group}}{The \code{FocusGroup} object managing the simulation, providing context.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-The `FGAgent` object of the selected speaker, or `NULL`.
+The \code{FGAgent} object of the selected speaker, or \code{NULL}.
 }
 }
 \if{html}{\out{<hr>}}
@@ -110,9 +124,24 @@ Updates internal state after a speaker is selected.
 \describe{
 \item{\code{speaker_id}}{The ID of the agent who was selected and just spoke.}
 
-\item{\code{focus_group}}{The `FocusGroup` object.}
+\item{\code{focus_group}}{The \code{FocusGroup} object.}
 }
 \if{html}{\out{</div>}}
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-ConversationFlow-note_moderator_turn"></a>}}
+\if{latex}{\out{\hypertarget{method-ConversationFlow-note_moderator_turn}{}}}
+\subsection{Method \code{note_moderator_turn()}}{
+Notes that the moderator has just spoken. The participant
+who spoke before the moderator's line is then no longer the previous
+speaker: whoever closed one question may open the next.
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{ConversationFlow$note_moderator_turn()}\if{html}{\out{</div>}}
+}
+
+\subsection{Returns}{
+The flow, invisibly.
 }
 }
 \if{html}{\out{<hr>}}

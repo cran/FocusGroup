@@ -4,9 +4,8 @@
 \alias{FGAgent}
 \title{FGAgent Class}
 \value{
-An R6 generator. `FGAgent$new(id, agent_details, config,
-  is_moderator = FALSE, .runner = NULL)` returns an `FGAgent`;
-  [create_agents()] and its relatives construct whole rosters.
+An R6 generator. \code{FGAgent$new(id, agent_details, config, is_moderator = FALSE, .runner = NULL)} returns an \code{FGAgent};
+\code{\link[=create_agents]{create_agents()}} and its relatives construct whole rosters.
 }
 \description{
 FGAgent Class
@@ -20,16 +19,16 @@ generate utterances and express a desire to speak.
 }
 \section{Customizing Agents}{
 
-`FGAgent` is designed to be flexible:
+\code{FGAgent} is designed to be flexible:
 \itemize{
-  \item **Per-Agent LLM Configuration**: Each agent is initialized with its own
-    `llm_config` (stored in the `config` field). This allows different
-    agents to use different LLMs, temperatures, or even providers.
-  \item **Persona Definition**: The `agent_details` (containing `demographics`,
-    `survey_responses`, `direct_persona_description`, and/or `communication_style`)
-    are used to construct the `persona_description` and `communication_style_instruction`.
-  \item **Subclassing**: For advanced customization, inherit from `FGAgent` to override
-    methods or add new fields.
+\item \strong{Per-Agent LLM Configuration}: Each agent is initialized with its own
+\code{llm_config} (stored in the \code{config} field). This allows different
+agents to use different LLMs, temperatures, or even providers.
+\item \strong{Persona Definition}: The \code{agent_details} (containing \code{demographics},
+\code{survey_responses}, \code{direct_persona_description}, and/or \code{communication_style})
+are used to construct the \code{persona_description} and \code{communication_style_instruction}.
+\item \strong{Subclassing}: For advanced customization, inherit from \code{FGAgent} to override
+methods or add new fields.
 }
 }
 
@@ -53,26 +52,41 @@ derived from demographics, survey responses, or direct input.}
 \item{\code{communication_style_instruction}}{Character. A specific instruction about the agent's
 communication style, to be included in prompts.}
 
-\item{\code{config}}{An `llm_config` object (from the `LLMR` package) specifying the
+\item{\code{config}}{An \code{llm_config} object (from the \code{LLMR} package) specifying the
 LLM provider, model, API key, and other parameters for this agent.}
 
-\item{\code{.runner}}{`NULL` or a function used instead of live model calls. It
-receives a data frame with `config` and `messages` list-columns and returns
-those rows with at least `response_text`.}
+\item{\code{.runner}}{\code{NULL} or a function used instead of live model calls. It
+receives a data frame with \code{config} and \code{messages} list-columns and returns
+those rows with at least \code{response_text}.}
 
-\item{\code{is_moderator}}{Logical. `TRUE` if the agent is the moderator, `FALSE` otherwise.}
+\item{\code{is_moderator}}{Logical. \code{TRUE} if the agent is the moderator, \code{FALSE} otherwise.}
 
 \item{\code{history}}{List. A log of utterances made by this agent during the simulation.}
 
-\item{\code{tokens_sent_agent}}{Numeric. Total tokens sent by this agent.}
+\item{\code{tokens_sent_agent}}{Numeric. Tokens sent by this agent's calls, as
+reported; calls that reported no count add nothing.}
 
-\item{\code{tokens_received_agent}}{Numeric. Total tokens received by this agent.}
+\item{\code{tokens_received_agent}}{Numeric. Tokens received by this agent's calls,
+as reported.}
+
+\item{\code{tokens_total_agent}}{Numeric. Total tokens of this agent's calls: each
+call's reported total, or its sent and received counts when it reported
+no total.}
+
+\item{\code{usage_unknown_agent}}{Numeric. Number of this agent's calls whose usage
+was incomplete, so that the three token fields are lower bounds when it is
+positive; \code{NA} when that number cannot be determined.}
 
 \item{\code{role}}{Character. "moderator" or "participant" for convenience in reports.}
 
 \item{\code{demographics}}{Named list. Raw demographics used to build persona.}
 
 \item{\code{survey_responses}}{Named list. Raw survey responses used to build persona.}
+
+\item{\code{handle}}{Character or \code{NULL}. The label under which this agent
+appears in the discussion and by which it recognizes its own turns,
+set by \link{FocusGroup} from its \code{handles}; \code{NULL} outside a session,
+when \code{id} is used.}
 }
 \if{html}{\out{</div>}}
 }
@@ -82,6 +96,7 @@ those rows with at least `response_text`.}
 \item \href{#method-FGAgent-new}{\code{FGAgent$new()}}
 \item \href{#method-FGAgent-generate_utterance}{\code{FGAgent$generate_utterance()}}
 \item \href{#method-FGAgent-get_need_to_talk}{\code{FGAgent$get_need_to_talk()}}
+\item \href{#method-FGAgent-answer_probe}{\code{FGAgent$answer_probe()}}
 \item \href{#method-FGAgent-clone}{\code{FGAgent$clone()}}
 }
 }
@@ -102,19 +117,19 @@ Initialize a new FGAgent.
 \item{\code{agent_details}}{List. Contains information to build the agent's persona.
 Can include:
 \itemize{
-  \item `demographics`: A named list of demographic attributes (e.g., `list(age = 30, occupation = "teacher")`).
-  \item `survey_responses`: A named list of survey questions and answers.
-  \item `direct_persona_description`: A character string to be used directly as the persona. Overrides demographics/survey if provided.
-  \item `communication_style`: A character string describing the agent's communication style (e.g., "analytical and direct", "empathetic and story-driven").
+\item \code{demographics}: A named list of demographic attributes (e.g., \code{list(age = 30, occupation = "teacher")}).
+\item \code{survey_responses}: A named list of survey questions and answers.
+\item \code{direct_persona_description}: A character string to be used directly as the persona. Overrides demographics/survey if provided.
+\item \code{communication_style}: A character string describing the agent's communication style (e.g., "analytical and direct", "empathetic and story-driven").
 }
-If `is_moderator` is `TRUE` and no specific details are provided, a default moderator persona is used.}
+If \code{is_moderator} is \code{TRUE} and no specific details are provided, a default moderator persona is used.}
 
-\item{\code{config}}{An `llm_config` object from `LLMR::llm_config()`. It may be
-`NULL` only for an analysis-only agent that will not generate output.}
+\item{\code{config}}{An \code{llm_config} object from \code{LLMR::llm_config()}. It may be
+\code{NULL} only for an analysis-only agent that will not generate output.}
 
-\item{\code{is_moderator}}{Logical. `TRUE` if this agent is the moderator, `FALSE` otherwise.}
+\item{\code{is_moderator}}{Logical. \code{TRUE} if this agent is the moderator, \code{FALSE} otherwise.}
 
-\item{\code{.runner}}{`NULL` uses live LLMR calls; a function is used instead of
+\item{\code{.runner}}{\code{NULL} uses live LLMR calls; a function is used instead of
 live model calls.}
 }
 \if{html}{\out{</div>}}
@@ -136,7 +151,8 @@ Generate an utterance for the agent.
   current_phase = "discussion",
   conversation_log = NULL,
   standing_rules = NULL,
-  self_state = TRUE
+  self_state = TRUE,
+  call_params = NULL
 )}\if{html}{\out{</div>}}
 }
 
@@ -157,25 +173,45 @@ Generate an utterance for the agent.
 
 \item{\code{current_phase}}{Character. The current phase of the focus group (e.g., "icebreaker", "exploration").}
 
-\item{\code{conversation_log}}{List or NULL. The structured conversation log. When
+\item{\code{conversation_log}}{List or NULL. The structured conversation log,
+with speakers under the labels this agent is to see. When
 supplied (and the template is not a legacy flat template), the message is
-built role-flipped: this agent's own prior turns become `assistant`
-messages and others' become labeled `user` messages. `NULL` keeps the
-legacy flat single-user-message construction.}
+built role-flipped: this agent's own prior turns, those under its
+\code{handle} (or, without one, its \code{id}), become \code{assistant}
+messages and others' become labeled \code{user} messages. \code{NULL} keeps the
+legacy flat single-user-message construction. In a session, the flat
+message of a participant opens with the sentence that tells it its
+handle ("In this discussion you are P3.").}
 
 \item{\code{standing_rules}}{Character or NULL. The system-message standing rules
-(persona-anchoring, safety, etc.) for the role-flipped path; `NULL` uses a
+(persona-anchoring, safety, etc.) for the role-flipped path; \code{NULL} uses a
 built-in default appropriate to the agent's role.}
 
-\item{\code{self_state}}{Logical. If `TRUE` (default), a compact "points you have
+\item{\code{self_state}}{Logical. If \code{TRUE} (default), a compact "points you have
 already made" digest of the agent's own prior turns is added to the system
 message (participants only) to discourage self-repetition.}
+
+\item{\code{call_params}}{Optional named list of model parameters written over
+the agent's configuration for this utterance and its retry, such as
+\code{list(reasoning_effort = "low")}.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-A list with `text` (the generated utterance) and `meta` (a list
-  of call metadata: token counts, finish reason, provider, model, timing).
+A list with \code{text} (the generated utterance) and \code{meta} (a list
+of call metadata: \code{response_id}, \code{finish_reason}, \code{sent_tokens},
+\code{rec_tokens}, \code{total_tokens}, \code{usage_unknown}, \code{duration_s},
+\code{provider}, \code{model}, and \code{metadata}). The token counts cover the first call and,
+when the reply was incomplete, its retry; each is \code{NA} unless every
+one of those calls reported it, and \code{usage_unknown} counts the calls
+whose usage was incomplete. The other fields describe the final reply.
+A label the agent wrote for itself at the start of the reply, such as
+\verb{P3:} or \verb{**MOD:**}, is removed from \code{text}, and \code{metadata} then
+holds \code{self_label_removed = TRUE}; another speaker's label is kept.
+A short opening self-introduction ("As a retired nurse, ") is
+removed too, and \code{metadata} then holds \code{preamble_removed = TRUE}; a
+longer opening clause, or one that is part of the statement, is kept.
+The agent's token fields are updated even when the retry fails.
 }
 }
 \if{html}{\out{<hr>}}
@@ -194,7 +230,9 @@ contribute to the discussion at the current moment.
   current_moderator_question = "N/A",
   last_speaker_id = "N/A",
   last_utterance_text = "N/A",
-  conversation_log = NULL
+  conversation_log = NULL,
+  max_tokens_retry = NULL,
+  call_params = NULL
 )}\if{html}{\out{</div>}}
 }
 
@@ -211,19 +249,103 @@ contribute to the discussion at the current moment.
 
 \item{\code{current_moderator_question}}{Character. The current question posed by the moderator.}
 
-\item{\code{last_speaker_id}}{Character. The ID of the agent who spoke last.}
+\item{\code{last_speaker_id}}{Character. The label of the agent who spoke last,
+as the agents see it.}
 
 \item{\code{last_utterance_text}}{Character. The text of the last utterance.}
 
-\item{\code{conversation_log}}{List or NULL. The structured conversation log. When
+\item{\code{conversation_log}}{List or NULL. The structured conversation log,
+with speakers under the labels this agent is to see. When
 supplied (and the template is not a legacy flat template), desire scoring
-is role-flipped so the agent reads its own prior turns as its own voice;
-`NULL` keeps the legacy flat construction.}
+is role-flipped so the agent reads its own prior turns, those under its
+handle, as its own voice;
+\code{NULL} keeps the legacy flat construction.}
+
+\item{\code{max_tokens_retry}}{Integer or NULL. The budget of the one retry made
+when the first reply is empty or cut off; \code{NULL} uses 256. No retry is
+made when \code{max_tokens_desire} is already at least this large.}
+
+\item{\code{call_params}}{Optional named list of model parameters written over
+the agent's configuration for these calls, such as
+\code{list(reasoning_effort = "low")}.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-Numeric. A score from 0 (no desire) to 10 (very strong desire).
+Numeric. A score from 0 (no desire) to 10 (very strong desire),
+read from the reply's final answer only: reasoning the provider
+returns separately, or that the model writes inside \verb{<think>} tags or
+the gpt-oss channel markup, is never read. A reply that cannot be read
+as a score is an error; the usage of the calls made, including a
+retry, is recorded on the agent first. The configuration's
+temperature, when it sets one, is used; none is added when it does
+not.
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-FGAgent-answer_probe"></a>}}
+\if{latex}{\out{\hypertarget{method-FGAgent-answer_probe}{}}}
+\subsection{Method \code{answer_probe()}}{
+Answer a private question put by the researcher. The
+agent reads its persona, the standing rules, and the discussion so
+far, as for a turn, and the question as the closing instruction. The
+answer is returned, not logged, and is not added to \code{history}.
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{FGAgent$answer_probe(
+  question,
+  conversation_log,
+  topic = NULL,
+  template = "{{probe_question}}",
+  max_tokens = NULL,
+  conversation_summary = NULL,
+  call_params = NULL,
+  scale = NULL,
+  reask_template = NULL
+)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{question}}{Character. The question.}
+
+\item{\code{conversation_log}}{List. The discussion so far, with speakers under
+the labels this agent is to see.}
+
+\item{\code{topic}}{Character or NULL. The session topic, available to the
+template as \code{{{topic}}}.}
+
+\item{\code{template}}{Character. The instruction template; \code{{{probe_question}}}
+is replaced by the question.}
+
+\item{\code{max_tokens}}{Integer or NULL. The budget; \code{NULL} uses the
+configuration's limit, or 300 when it sets none.}
+
+\item{\code{conversation_summary}}{Character or NULL. A summary of earlier
+discussion to add to the system message.}
+
+\item{\code{call_params}}{Optional named list of model parameters written over
+the configuration for this call.}
+
+\item{\code{scale}}{Optional two whole numbers, \code{c(lo, hi)}. When given, the
+answer is read as one number on that scale, and an answer from which
+none can be read is followed by one re-ask (see \code{\link[=fg_probe]{fg_probe()}}).}
+
+\item{\code{reask_template}}{Character or NULL. The re-ask, with placeholders
+\code{{{lo}}}, \code{{{hi}}}, and \code{{{probe_question}}}; \code{NULL} uses
+\code{participant_probe_reask} of \code{\link[=get_default_prompt_templates]{get_default_prompt_templates()}}.}
+}
+\if{html}{\out{</div>}}
+}
+\subsection{Returns}{
+A list with \code{answer} (the final answer, trimmed, or \code{NA} when
+the reply is empty after one retry with a larger budget), \code{raw_text}
+(the reply as returned), \code{finish_reason}, \code{call_id} (the call's
+row in the session's call record, or \code{NA} outside a session),
+\code{value} (the number read from the answer on \code{scale}, or \code{NA}), and
+\code{attempts} (the number of calls made). After a re-ask that returned
+text, \code{answer}, \code{raw_text}, \code{finish_reason}, and \code{call_id} describe
+the re-ask.
 }
 }
 \if{html}{\out{<hr>}}

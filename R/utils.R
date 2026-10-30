@@ -13,23 +13,164 @@ NULL
   if (is.null(x) || length(x) == 0) y else x
 }
 
-# NA-safe token count for accumulation: NULL, length-0, NA, or non-numeric all
-# collapse to 0 so a provider that reports no usage cannot poison a running
-# total (`NA %||% 0` is NA, which would propagate through every later sum).
-.fg_tok0 <- function(x) {
-  v <- suppressWarnings(as.numeric(x %||% 0))
-  v[is.na(v)] <- 0
-  sum(v)
+# ---- Usage accounting --------------------------------------------------------
+# A usage record holds observed token subtotals (`sent`, `rec`, `total`), the
+# number of calls whose usage was incomplete (`unknown`), the same count for
+# each component (`sent_unknown`, `rec_unknown`, `total_unknown`), and the
+# number of returned calls (`calls`). Subtotals add only reported values, so a
+# subtotal is a lower bound whenever its unknown count is positive. An unknown
+# count is NA when completeness cannot be determined at all, for example when
+# a call raised an error and gave no response to inspect.
+
+# Sum normalized observed counts. Missing usage is recorded separately.
+.fg_tok0 <- function(x) as.double(sum(x, na.rm = TRUE))
+
+.fg_usage_empty <- function() {
+  list(sent = 0, rec = 0, total = 0, unknown = 0,
+       sent_unknown = 0, rec_unknown = 0, total_unknown = 0, calls = 0)
 }
 
-.fg_add_group_usage <- function(focus_group, sent = 0L, rec = 0L) {
-  focus_group$total_tokens_sent <- focus_group$total_tokens_sent + .fg_tok0(sent)
-  focus_group$total_tokens_received <-
-    focus_group$total_tokens_received + .fg_tok0(rec)
-  invisible(list(
-    sent = focus_group$total_tokens_sent,
-    rec = focus_group$total_tokens_received
-  ))
+# The record for a call that raised an error, or whose usage could not be
+# read: no observed tokens and completeness unavailable.
+.fg_usage_unavailable <- function(calls = 0) {
+  usage <- .fg_usage_empty()
+  usage$calls <- calls
+  usage[c("unknown", "sent_unknown", "rec_unknown", "total_unknown")] <- NA_real_
+  usage
+}
+
+.fg_usage_merge <- function(x, y) {
+  for (name in names(x)) {
+    value <- x[[name]] + y[[name]]
+    if (!is.na(value) && !is.finite(value)) {
+      warning("Accumulated token usage exceeds the numeric range; completeness is unavailable.",
+              call. = FALSE)
+      value <- x[[name]]
+      x$unknown <- NA_real_
+      x[[paste0(name, "_unknown")]] <- NA_real_
+    }
+    x[[name]] <- value
+  }
+  x
+}
+
+# Accumulate the usage of the calls one operation makes. `add` receives each
+# call's record. With `runner`, the returned `runner` wraps it and records
+# every result it returns, and an unavailable record when it raises an error.
+# With `safe = TRUE` (the Studio), problems reading usage are collected in
+# `issues()` instead of being signaled, so that accounting cannot interrupt the
+# action whose calls it records.
+.fg_usage_recorder <- function(runner = NULL, safe = FALSE) {
+  usage <- .fg_usage_empty()
+  issues <- character()
+  add <- function(record) usage <<- .fg_usage_merge(usage, record)
+  list(add = add, value = function() usage, issues = function() issues,
+       runner = function(experiments, ...) {
+         out <- tryCatch(runner(experiments, ...), error = function(e) {
+           add(.fg_usage_unavailable())
+           stop(e)
+         })
+         if (safe) {
+           record <- tryCatch(withCallingHandlers(.fg_usage_record(out),
+             warning = function(w) {
+               issues <<- c(issues, conditionMessage(w))
+               invokeRestart("muffleWarning")
+             }), error = function(e) {
+               issues <<- c(issues, conditionMessage(e))
+               .fg_usage_unavailable(if (is.data.frame(out)) nrow(out) else 1)
+             })
+           withCallingHandlers(add(record), warning = function(w) {
+             issues <<- c(issues, conditionMessage(w))
+             invokeRestart("muffleWarning")
+           })
+           attr(out, "focusgroup_usage") <- record
+         } else add(.fg_usage_record(out))
+         out
+       })
+}
+
+# Add a usage record to the token fields of an agent or a group. `fields` maps
+# record elements to the object's field names. An object saved by an earlier
+# version lacks the newer fields and cannot gain them (its environment is
+# locked), so those values accumulate in its `additional_usage` attribute.
+.fg_add_usage <- function(object, usage, fields) {
+  extra <- attr(object, "additional_usage") %||% .fg_usage_empty()
+  before <- .fg_usage_empty()
+  record <- .fg_usage_empty()
+  for (name in names(fields)) {
+    field <- fields[[name]]
+    before[[name]] <- if (field %in% names(object)) object[[field]] else extra[[name]]
+    record[[name]] <- usage[[name]]
+  }
+  after <- .fg_usage_merge(before, record)
+  for (name in names(fields)) {
+    field <- fields[[name]]
+    if (field %in% names(object)) object[[field]] <- after[[name]] else extra[[name]] <- after[[name]]
+  }
+  attr(object, "additional_usage") <- extra
+  invisible(usage)
+}
+
+# Run a model analysis on a group. A group saved by an earlier version keeps
+# its own methods and counters, which do not record completeness, so the usage
+# its new calls signal is also collected in its `recorded_usage` attribute.
+.fg_legacy_usage <- function(object, expr) {
+  if ("total_tokens" %in% names(object)) return(force(expr))
+  withCallingHandlers(expr, focusgroup_usage = function(cnd) {
+    attr(object, "recorded_usage") <- .fg_usage_merge(
+      attr(object, "recorded_usage") %||% .fg_usage_empty(), cnd$usage)
+  })
+}
+
+.fg_add_agent_usage <- function(agent, usage) {
+  .fg_add_usage(agent, usage, c(sent = "tokens_sent_agent",
+    rec = "tokens_received_agent", total = "tokens_total_agent",
+    unknown = "usage_unknown_agent"))
+}
+
+.fg_add_group_usage <- function(focus_group, sent = 0L, rec = 0L,
+                                total, unknown) {
+  .fg_add_usage(focus_group,
+    list(sent = sent, rec = rec,
+         total = if (missing(total)) NA_real_ else total,
+         unknown = if (missing(unknown)) NA_real_ else unknown),
+    c(sent = "total_tokens_sent", rec = "total_tokens_received",
+      total = "total_tokens", unknown = "calls_usage_unknown"))
+}
+
+# Add a usage record to a group's token fields.
+.fg_record_group <- function(group, usage) {
+  .fg_add_group_usage(group, usage$sent, usage$rec, usage$total, usage$unknown)
+}
+
+# Evaluate `expr`, adding to the group the usage of every model call made
+# inside it. Each call signals its usage as soon as it returns, before its
+# output is checked, so calls whose output is then rejected are counted too.
+.fg_with_group_usage <- function(group, expr) {
+  withCallingHandlers(expr, focusgroup_usage = function(cnd) {
+    .fg_record_group(group, cnd$usage)
+  })
+}
+
+# The line that follows a displayed token count: empty when usage is
+# complete, otherwise the number of calls whose usage is missing.
+.fg_usage_note <- function(unknown) {
+  if (is.null(unknown)) {
+    "Usage completeness was not recorded for this result.\n"
+  } else if (is.na(unknown)) {
+    "Token usage is incomplete for an undetermined number of calls.\n"
+  } else if (unknown > 0) {
+    sprintf("Token usage is incomplete for %s call(s).\n", format(unknown))
+  } else ""
+}
+
+# A token count for display: exact when every call reported it, otherwise a
+# lower bound, or "unknown" when nothing was reported.
+.fg_usage_text <- function(value, unknown) {
+  if (is.null(value) || is.na(value)) return("unknown")
+  if (is.null(unknown) || is.na(unknown) || unknown > 0) {
+    if (value > 0) paste("at least", format(value, trim = TRUE)) else "unknown"
+  } else format(value, trim = TRUE)
 }
 
 # --- Formatting Helpers ---
@@ -120,21 +261,9 @@ format_conversation_history <- function(conversation_log,
       formatted_messages <- vapply(recent_messages_list, format_message, character(1))
     }
   } else {
-    if (!is.numeric(max_tokens_history) || length(max_tokens_history) != 1 || max_tokens_history <= 0) {
-      stop("max_tokens_history must be a positive number.")
-    }
-    formatted_messages <- character(0)
-    current_tokens <- 0L
-
-    for (i in rev(seq_along(conversation_log))) {
-      msg_text <- format_message(conversation_log[[i]])
-      msg_tokens <- estimate_tokens(msg_text)
-      if (length(formatted_messages) > 0 && current_tokens + msg_tokens > max_tokens_history) {
-        break
-      }
-      formatted_messages <- c(msg_text, formatted_messages)
-      current_tokens <- current_tokens + msg_tokens
-    }
+    start <- .fg_window_start(conversation_log, max_tokens_history)
+    formatted_messages <- vapply(conversation_log[seq.int(start, length(conversation_log))],
+                                 format_message, character(1))
   }
 
   if (length(formatted_messages) > 0) {
@@ -150,50 +279,674 @@ format_conversation_history <- function(conversation_log,
   paste(history_parts, collapse = "\n")
 }
 
+# The position of the oldest message the prompt window keeps. Messages are
+# taken from the newest back while their estimated tokens fit within
+# `max_tokens_history`; the newest message is always kept. Messages before
+# this position are the part of the history that prompts no longer show.
+.fg_window_start <- function(conversation_log, max_tokens_history) {
+  if (!is.numeric(max_tokens_history) || length(max_tokens_history) != 1 || max_tokens_history <= 0) {
+    stop("max_tokens_history must be a positive number.")
+  }
+  n <- length(conversation_log)
+  start <- n + 1L
+  current_tokens <- 0L
+  for (i in rev(seq_len(n))) {
+    msg <- conversation_log[[i]]
+    msg_tokens <- estimate_tokens(paste0(msg$speaker_id %||% "UnknownSpeaker", ": ",
+                                         msg$text %||% ""))
+    if (start <= n && current_tokens + msg_tokens > max_tokens_history) break
+    start <- i
+    current_tokens <- current_tokens + msg_tokens
+  }
+  start
+}
 
-# Retry budget for desire scoring when the first reply is empty or length-
-# truncated. Reasoning models can exhaust a small budget on hidden reasoning
-# before emitting the single integer; 256 output tokens lets it surface. Used
-# only on the retry, so ordinary models never pay it.
+
+# Default retry budget for desire scoring when the first reply is empty or
+# length-truncated. A reasoning model can exhaust a small budget on reasoning
+# before emitting the single integer. Used only on the retry, so ordinary
+# models never pay it; `max_tokens_config$desire_retry` replaces it, which a
+# model that reasons at length needs.
 .fg_desire_retry_tokens <- 256L
 
-# ---- Token & parsing utilities ---------------------------------------------
+# The prompt window: the estimated tokens of history a prompt shows.
+.fg_prompt_window_tokens <- 64000L
 
-# Dispatch one model call. An injected runner follows the shared experiments-
-# frame contract used across the LLMR package family.
-.fg_call_llm <- function(config, messages, .runner = NULL, ...) {
-  if (is.null(.runner)) {
-    return(LLMR::call_llm_robust(
-      config = config,
-      messages = messages,
-      ...
-    ))
-  }
-  if (!is.function(.runner)) {
-    stop("`.runner` must be `NULL` or a function.", call. = FALSE)
-  }
-  experiments <- data.frame(.experiment_id = 1L)
-  experiments$config <- I(list(config))
-  experiments$messages <- I(list(messages))
-  out <- .runner(experiments, ...)
-  required <- c("config", "messages", "response_text")
-  if (!is.data.frame(out) || nrow(out) != 1L ||
-      !all(required %in% names(out))) {
-    stop("`.runner` must return the experiment rows with `config`, `messages`, and `response_text` columns.",
-         call. = FALSE)
-  }
-  if ("success" %in% names(out) && !isTRUE(out$success[[1]])) {
-    reason <- if ("error" %in% names(out)) as.character(out$error[[1]]) else
-      "The runner reported an unsuccessful model call."
-    stop(reason, call. = FALSE)
-  }
-  if (is.na(out$response_text[[1]])) {
-    stop("`.runner` returned a missing `response_text`.", call. = FALSE)
+# Phases whose moderator line poses a question, and phases whose line is
+# answered by participant turns.
+.fg_question_phases <- c("icebreaker_question", "engagement_question",
+                         "exploration_question", "probing_focused",
+                         "ending_question", "generic_discussion", "transition")
+# The phases a guide item can have: those with a moderator template, and
+# "generic_discussion".
+.fg_guide_phases <- c("opening", "icebreaker_question", "engagement_question",
+                      "exploration_question", "probing_focused", "summarizing",
+                      "transition", "manage_participation", "ending_question",
+                      "closing", "generic_utterance", "generic_discussion")
+.fg_response_phases <- c("icebreaker_question", "engagement_question",
+                         "exploration_question", "probing_focused",
+                         "ending_question", "generic_discussion")
+
+# ---- Handles ------------------------------------------------------------------
+# Agents see each other under handles, not under the IDs the researcher gave
+# them: the researcher's records keep the IDs, and every prompt shows the
+# handles. By default participants are "P1", "P2", ... in roster order and the
+# moderator is "Moderator".
+
+# The neutral handles: the moderator is "Moderator"; a participant whose ID is
+# already of the form "P1" to "P99" keeps it, and the others are numbered
+# "P1", "P2", ... in roster order, skipping every number that is an agent's
+# ID, the moderator's included, or a name in `reserved`, such as an injected
+# voice's, compared without regard to case. So "P2" never stands for an agent
+# other than the one whose ID it is.
+.fg_neutral_handles <- function(ids, moderator_id, reserved = character()) {
+  participants <- setdiff(ids, moderator_id)
+  out <- stats::setNames(rep("Moderator", length(ids)), ids)
+  kept <- participants[grepl("^P[1-9][0-9]?$", participants)]
+  out[kept] <- kept
+  taken <- tolower(c(ids, reserved))
+  k <- 0L
+  for (id in setdiff(participants, kept)) {
+    repeat {
+      k <- k + 1L
+      if (!tolower(paste0("P", k)) %in% taken) break
+    }
+    out[[id]] <- paste0("P", k)
   }
   out
 }
 
+# The handle of every agent, named by agent ID, from the `handles` argument of
+# FocusGroup$new(): NULL for the neutral handles, "ids" for the agent IDs, or
+# a character vector naming some agents by ID with the handle each is to have;
+# the others keep their neutral handles. A handle cannot be empty, repeated,
+# "System", a name in `reserved` (the voices a session injects), or contain a
+# standalone number from 0 to 10, which the desire-score parser would read as
+# a score.
+.fg_resolve_handles <- function(handles, ids, moderator_id, reserved = character()) {
+  neutral <- .fg_neutral_handles(ids, moderator_id, reserved)
+  if (is.null(handles)) return(neutral)
+  if (identical(handles, "ids")) return(stats::setNames(ids, ids))
+  if (!is.character(handles) || !length(handles)) {
+    stop("`handles` must be `NULL`, \"ids\", or a character vector named by agent ID.",
+         call. = FALSE)
+  }
+  given <- names(handles)
+  if (is.null(given) || anyNA(given) || any(!nzchar(given))) {
+    stop("Every element of `handles` must be named by the agent ID it labels.",
+         call. = FALSE)
+  }
+  unknown <- setdiff(given, ids)
+  if (length(unknown)) {
+    stop("`handles` names agents that are not in the roster: ",
+         paste(unknown, collapse = ", "), ".", call. = FALSE)
+  }
+  if (anyDuplicated(given)) {
+    stop("`handles` names agent ", given[anyDuplicated(given)], " more than once.",
+         call. = FALSE)
+  }
+  if (anyNA(handles) || any(!nzchar(trimws(handles)))) {
+    stop("A handle must be a non-empty string.", call. = FALSE)
+  }
+  out <- neutral
+  out[given] <- trimws(unname(handles))
+  repeated <- out[duplicated(tolower(out)) | duplicated(tolower(out), fromLast = TRUE)]
+  if (length(repeated)) {
+    stop("Each agent needs its own handle; ", paste(unique(repeated), collapse = ", "),
+         " would be shared.", call. = FALSE)
+  }
+  if (any(tolower(out) == "system")) {
+    stop("\"System\" cannot be a handle: it labels the roster row.", call. = FALSE)
+  }
+  voices <- out[tolower(out) %in% tolower(reserved)]
+  if (length(voices)) {
+    stop("A handle cannot be the name of an injected voice: ",
+         paste(unique(voices), collapse = ", "), ".", call. = FALSE)
+  }
+  numbered <- out[grepl("\\b(10|[0-9])\\b", out, perl = TRUE)]
+  if (length(numbered)) {
+    stop("A handle cannot contain a standalone number from 0 to 10, which would be ",
+         "read as a desire score: ", paste(numbered, collapse = ", "),
+         ". Use a form such as \"P3\".", call. = FALSE)
+  }
+  out
+}
+
+# The label an agent answers to in a discussion: its handle, or its ID for an
+# agent used outside a session or saved by an earlier version.
+.fg_agent_label <- function(agent) {
+  handle <- agent$handle
+  if (is.character(handle) && length(handle) == 1L && !is.na(handle) && nzchar(handle)) {
+    handle
+  } else {
+    agent$id
+  }
+}
+
+# The sentence that tells a participant its handle, or NULL for the moderator
+# and for an agent outside a session.
+.fg_handle_sentence <- function(agent) {
+  if (isTRUE(agent$is_moderator) || is.null(agent$handle)) return(NULL)
+  sprintf("In this discussion you are %s.", .fg_agent_label(agent))
+}
+
+# The one user message of the flat construction: the filled template, after
+# the sentence that tells a participant its handle, so that it can tell its
+# own lines in the transcript the template inlines.
+.fg_flat_messages <- function(agent, prompt) {
+  list(list(role = "user",
+            content = paste(c(.fg_handle_sentence(agent), prompt), collapse = "\n\n")))
+}
+
+# The system text of a desire-scoring call, shared by the per-agent and the
+# broadcast paths so that both send the same messages.
+.fg_desire_system_text <- function(agent) {
+  paste(c(agent$persona_description, .fg_handle_sentence(agent),
+          "You are rating your own desire to speak next."),
+        collapse = "\n")
+}
+
+# The log as the agents see it, for a turn-taking flow or another helper that
+# receives the session: speakers under their handles. A plain list standing in
+# for a session, or a session saved by an earlier version, has its log
+# returned as it is. `log` replaces the session's own log, as for a cut
+# transcript in the Studio's continuation experiment.
+.fg_agent_log <- function(focus_group, log = NULL) {
+  view <- if (inherits(focus_group, "FocusGroup")) {
+    focus_group$.__enclos_env__$private$agent_view
+  }
+  if (is.null(log)) log <- focus_group$conversation_log
+  if (is.function(view)) view(log) else log
+}
+
+# Regular-expression metacharacters escaped, so that a handle matches only
+# itself.
+.fg_regex_escape <- function(x) {
+  gsub("([.|()\\\\^{}+$*?\\[\\]])", "\\\\\\1", x, perl = TRUE)
+}
+
+# The participant a moderator line gives the floor to, or NA. The line's last
+# question, the last sentence ending in "?", must open with one participant's
+# handle and a comma or colon ("P3, do you agree with P2?", "P3: what do you
+# think?"), close with a comma and one handle ("Could you say more, P3?"), or
+# be a short follow-up that names one handle and nothing else ("And P3?",
+# "What about P3?", "How about P3?"), and must not also put the question to
+# the group ("What does everyone think?", "P3, who else agrees?"). A handle
+# in a list of handles ("P2, P3, what do you think?", "What do you think, P2
+# and P3?") addresses no one, nor does a question that opens with one handle
+# and closes with another, nor a recap that gives two handles a colon ("P2:
+# evenings, P3: mornings?"). `handles` are the participants' handles named by
+# agent ID; the agent ID is returned.
+.fg_addressee <- function(text, handles) {
+  if (!length(handles) || !is.character(text) || length(text) != 1L || is.na(text)) {
+    return(NA_character_)
+  }
+  # Markdown emphasis is not part of the words; an underscore inside a word,
+  # as in a handle such as "nurse_lib", is.
+  plain <- gsub("\\*+", "", text)
+  plain <- gsub("(?<![[:alnum:]])_+|_+(?![[:alnum:]])", "", plain, perl = TRUE)
+  sentences <- trimws(strsplit(plain, "(?<=[.!?])\\s+", perl = TRUE)[[1]])
+  sentences <- sub("[\"')\\]\\s]+$", "", sentences, perl = TRUE)
+  questions <- sentences[grepl("\\?$", sentences)]
+  if (!length(questions)) return(NA_character_)
+  question <- questions[[length(questions)]]
+  group <- paste0("(?i)\\b(everyone|everybody|anyone|anybody|someone|somebody|",
+                  "others|other participants|other people|the rest of you|",
+                  "all of you|any of you|each of you|both|you all|who else|",
+                  "the group|the whole group)\\b")
+  if (grepl(group, question, perl = TRUE)) return(NA_character_)
+  escaped <- vapply(handles, .fg_regex_escape, character(1))
+  any_handle <- paste0("(?:", paste(escaped, collapse = "|"), ")(?![[:alnum:]_])")
+  start <- "^[\\s\"'(\\[]*"
+  colons <- lengths(regmatches(question, gregexpr(
+    paste0("(?<![[:alnum:]_])", any_handle, "\\s*:"), question, perl = TRUE)))
+  follow_up <- paste0(start, "(?i:and(?:\\s+(?:what|how)\\s+about)?|what\\s+about|",
+                      "how\\s+about)\\s+")
+  opener <- closer <- character()
+  for (i in seq_along(handles)) {
+    h <- paste0(escaped[[i]], "(?![[:alnum:]_])")
+    if (grepl(paste0(start, h, "\\s*,"), question, perl = TRUE) &&
+        !grepl(paste0(start, h, "\\s*,\\s*", any_handle), question, perl = TRUE)) {
+      opener <- c(opener, names(handles)[[i]])
+    }
+    if (colons == 1L && grepl(paste0(start, h, "\\s*:"), question, perl = TRUE) &&
+        !grepl(paste0(start, h, "\\s*:\\s*", any_handle), question, perl = TRUE)) {
+      opener <- c(opener, names(handles)[[i]])
+    }
+    if (grepl(paste0(follow_up, escaped[[i]], "\\s*\\?$"), question, perl = TRUE)) {
+      opener <- c(opener, names(handles)[[i]])
+    }
+    if (grepl(paste0(",\\s*(?<![[:alnum:]_])", escaped[[i]], "\\s*\\?$"), question, perl = TRUE) &&
+        !grepl(paste0("(?<![[:alnum:]_])", any_handle, "\\s*(?:,|and|or|&)\\s*",
+                      escaped[[i]], "\\s*\\?$"), question, perl = TRUE)) {
+      closer <- c(closer, names(handles)[[i]])
+    }
+  }
+  named <- unique(c(opener, closer))
+  if (length(named) == 1L) named else NA_character_
+}
+
+# Remove a label the speaker wrote for itself at the start of its reply, such
+# as "**MOD:**" or "P3:". `labels` are the speaker's own labels; another
+# speaker's label is content and stays. Returns the text and whether a label
+# was removed.
+.fg_strip_self_label <- function(text, labels) {
+  labels <- unique(labels[!is.na(labels) & nzchar(labels)])
+  if (!length(labels) || !length(text) || is.na(text) || !nzchar(text)) {
+    return(list(text = text, removed = FALSE))
+  }
+  pattern <- paste0("^\\s*[*_]{0,2}\\s*(?:",
+                    paste(.fg_regex_escape(labels), collapse = "|"),
+                    ")\\s*[*_]{0,2}\\s*:\\s*[*_]{0,2}\\s*")
+  if (!grepl(pattern, text, perl = TRUE, ignore.case = TRUE)) {
+    return(list(text = text, removed = FALSE))
+  }
+  list(text = sub(pattern, "", text, perl = TRUE, ignore.case = TRUE), removed = TRUE)
+}
+
+# The labels an agent might write for itself at the start of a reply: its
+# handle (its ID only when it has none), and for the moderator also "MOD" and
+# "Moderator". An agent never sees its ID beside a handle, and under
+# permuted handles its ID is another agent's handle, which is content.
+.fg_self_labels <- function(agent) {
+  labels <- .fg_agent_label(agent)
+  if (isTRUE(agent$is_moderator)) labels <- c(labels, "MOD", "Moderator")
+  unique(labels)
+}
+
+# The text of the roster row, from the participants' and the moderator's
+# labels.
+.fg_roster_text <- function(participants, moderator) {
+  paste0("Participants: ", paste(participants, collapse = ", "),
+         "; Moderator: ", moderator)
+}
+
+# A setting that must be TRUE or FALSE.
+.fg_check_flag <- function(x, name) {
+  if (!is.logical(x) || length(x) != 1L || is.na(x)) {
+    stop("`", name, "` must be `TRUE` or `FALSE`.", call. = FALSE)
+  }
+  invisible(x)
+}
+
+# A seed: NULL, or one whole number that fits in an integer. A fraction such
+# as 1.7 would be truncated without notice, and two seeds would draw the same.
+.fg_check_seed <- function(seed) {
+  if (is.null(seed)) return(invisible(NULL))
+  if (!is.numeric(seed) || length(seed) != 1L || is.na(seed) || !is.finite(seed) ||
+      seed != round(seed) || abs(seed) > .Machine$integer.max) {
+    stop("`seed` must be `NULL` or one whole number, as in `seed = 110`.", call. = FALSE)
+  }
+  invisible(seed)
+}
+
+# ---- Call-ons -----------------------------------------------------------------
+
+.fg_call_on_names <- c("opening", "midpoint", "end")
+
+# Appended to the turn instruction of a participant the moderator called on,
+# and of one the moderator's last question was put to by handle.
+.fg_called_on_cue <- "The moderator has asked you directly for your view."
+.fg_addressed_cue <- "The moderator's last question was put to you directly."
+
+.fg_default_call_on_text <- "{participant}, I'd like to hear from you as well. What are your thoughts?"
+
+# The guide items at which the moderator calls on the participants who have
+# not spoken: `call_on_silent` resolved against the phases of the guide.
+# "opening" is the first discussion item, "midpoint" discussion item
+# ceiling(D / 2) of D, and "end" the last; item numbers count every guide
+# item and must name discussion items. TRUE means the three named points;
+# "none", FALSE, and NULL mean none. Returns the items in order, each once,
+# with the name of each point ("item:<k>" for a number).
+.fg_call_on_points <- function(call_on_silent, phases) {
+  none <- list(points = character(), items = integer())
+  if (is.null(call_on_silent) || isFALSE(call_on_silent) ||
+      identical(call_on_silent, "none")) {
+    return(none)
+  }
+  if (isTRUE(call_on_silent)) call_on_silent <- .fg_call_on_names
+  discussion <- which(phases %in% .fg_response_phases)
+  if (is.character(call_on_silent)) {
+    if (!length(call_on_silent) || anyNA(call_on_silent) ||
+        !all(call_on_silent %in% .fg_call_on_names)) {
+      stop("`call_on_silent` must be \"none\", FALSE, TRUE, any of \"opening\", ",
+           "\"midpoint\", and \"end\", or guide item numbers.", call. = FALSE)
+    }
+    if (!length(discussion)) return(none)
+    d <- length(discussion)
+    at <- c(opening = discussion[[1]], midpoint = discussion[[ceiling(d / 2)]],
+            end = discussion[[d]])
+    named <- .fg_call_on_names[.fg_call_on_names %in% call_on_silent]
+    items <- as.integer(at[named])
+    keep <- !duplicated(items)
+    ord <- order(items[keep])
+    return(list(points = named[keep][ord], items = items[keep][ord]))
+  }
+  v <- call_on_silent
+  if (!is.numeric(v) || !length(v) || anyNA(v) || any(!is.finite(v)) ||
+      any(v != floor(v)) || any(v < 1) || any(v > length(phases))) {
+    stop("`call_on_silent` item numbers must be whole numbers from 1 to ",
+         length(phases), ", the guide's items.", call. = FALSE)
+  }
+  items <- sort(unique(as.integer(v)))
+  bad <- setdiff(items, discussion)
+  if (length(bad)) {
+    stop("`call_on_silent` names guide item(s) ",
+         paste(sprintf("%d (%s)", bad, phases[bad]), collapse = ", "),
+         " that participants do not answer; choose discussion items.", call. = FALSE)
+  }
+  list(points = paste0("item:", items), items = items)
+}
+
+# The call-on line, checked: one string containing "{participant}".
+.fg_check_call_on_text <- function(call_on_text) {
+  if (is.null(call_on_text)) return(.fg_default_call_on_text)
+  if (!is.character(call_on_text) || length(call_on_text) != 1L || is.na(call_on_text) ||
+      !grepl("{participant}", call_on_text, fixed = TRUE)) {
+    stop("`call_on_text` must be one string containing \"{participant}\", ",
+         "which is replaced by the participant's handle.", call. = FALSE)
+  }
+  call_on_text
+}
+
+# The name a session's routing record gives its turn-taking flow.
+.fg_flow_name <- function(flow) {
+  if (inherits(flow, "RoundRobinFlow")) "round_robin"
+  else if (inherits(flow, "ProbabilisticFlow")) "probabilistic"
+  else if (inherits(flow, "DesireBasedFlow")) "desire_based"
+  else class(flow)[1]
+}
+
+# A copy of a session that shares nothing mutable with it: the group, each
+# agent, and the turn-taking flow, whose roster is pointed at the copied
+# agents. Attributes the session carries are kept.
+.fg_clone_session <- function(fg) {
+  out <- fg$clone(deep = TRUE)
+  agents <- lapply(fg$agents, function(a) a$clone(deep = TRUE))
+  attributes(agents) <- attributes(fg$agents)
+  out$agents <- agents
+  out$turn_taking_flow$agents <- agents
+  for (name in c("execution_phase", "session_status", "additional_usage",
+                 "recorded_usage")) {
+    attr(out, name) <- attr(fg, name)
+  }
+  out
+}
+
+# The call types a session distinguishes when it applies per-call settings.
+.fg_call_types <- c("moderator", "participant", "desire", "summary", "probe")
+
+# Check a session's `reasoning_effort`: NULL, one setting for every call
+# type, or a named vector or list giving settings by call type.
+.fg_validate_reasoning_effort <- function(reasoning_effort) {
+  if (is.null(reasoning_effort)) return(NULL)
+  values <- if (is.list(reasoning_effort)) reasoning_effort else as.list(reasoning_effort)
+  ok <- length(values) >= 1L && all(vapply(values, function(v) {
+    is.character(v) && length(v) == 1L && !is.na(v) && nzchar(trimws(v))
+  }, logical(1)))
+  if (!ok) {
+    stop("`reasoning_effort` must be `NULL`, one non-empty string, or a named ",
+         "vector of strings by call type.", call. = FALSE)
+  }
+  types <- names(values)
+  if (is.null(types)) {
+    if (length(values) != 1L) {
+      stop("An unnamed `reasoning_effort` must be one string; name the ",
+           "elements to set it by call type.", call. = FALSE)
+    }
+    return(values[[1]])
+  }
+  if (anyNA(types) || any(!types %in% .fg_call_types) || anyDuplicated(types)) {
+    stop("`reasoning_effort` names must be distinct call types among ",
+         paste(.fg_call_types, collapse = ", "), ".", call. = FALSE)
+  }
+  values
+}
+
+# Model parameters a session applies to one call type over the agent's
+# configuration: its `reasoning_effort`, when it sets one for that type.
+.fg_call_params <- function(focus_group, type) {
+  effort <- focus_group$reasoning_effort
+  if (is.list(effort)) effort <- effort[[type]]
+  if (is.null(effort)) list() else list(reasoning_effort = effort)
+}
+
+# A configuration with `params` written over its model parameters.
+.fg_with_params <- function(config, params) {
+  if (is.null(config) || !length(params)) return(config)
+  config$model_params <- utils::modifyList(config$model_params %||% list(), params)
+  config
+}
+
+# The final answer of a reply, without reasoning the model wrote into it.
+# Some providers return a reasoning model's thinking inside the reply text
+# rather than in a separate field: as <think> blocks, or in the channel
+# markup of the gpt-oss models, whose answer follows the "final" channel tag.
+# Only the text outside the reasoning is the answer, and a reasoning block
+# that never closes leaves none. A reply without such markup is unchanged.
+.fg_final_answer <- function(text) {
+  markup <- "<\\|channel\\|>|</?(think|thinking|reasoning)>"
+  if (!grepl(markup, text, ignore.case = TRUE, perl = TRUE)) return(text)
+  final <- regexpr("<\\|channel\\|>\\s*final\\s*<\\|message\\|>", text, perl = TRUE)
+  if (final > 0) {
+    text <- substring(text, final + attr(final, "match.length"))
+    text <- sub("<\\|(end|return|call)\\|>.*$", "", text, perl = TRUE)
+  } else if (grepl("<|channel|>", text, fixed = TRUE)) {
+    return("")
+  }
+  text <- gsub("(?is)<(think|thinking|reasoning)>.*?</\\1>", "", text, perl = TRUE)
+  text <- sub("(?is)<(think|thinking|reasoning)>.*$", "", text, perl = TRUE)
+  text <- sub("(?is)^.*</(think|thinking|reasoning)>", "", text, perl = TRUE)
+  trimws(text)
+}
+
+# ---- Session records -----------------------------------------------------------
+# A running session keeps a record of every model call it makes: the messages
+# sent, the reply as returned, the settings, and the usage. .fg_call_llm()
+# signals a `focusgroup_call` condition when a call returns or fails, and a
+# running session collects it; a later `focusgroup_call_note` adds what the
+# caller made of the reply, such as the cleaned text or the score. Outside a
+# session the signals are ignored. Only an allowlist of scalar model
+# parameters enters a record, so neither a key nor an endpoint URL can.
+
+.fg_record_params <- c("max_tokens", "max_completion_tokens", "max_output_tokens",
+  "temperature", "top_p", "top_k", "frequency_penalty", "presence_penalty",
+  "repetition_penalty", "seed", "reasoning_effort", "thinking_budget",
+  "include_thoughts", "logprobs", "top_logprobs")
+
+# The recorded settings of a call: the allowlisted scalar model parameters.
+.fg_call_settings <- function(config) {
+  params <- config$model_params %||% list()
+  params <- params[intersect(.fg_record_params, names(params))]
+  Filter(function(v) is.atomic(v) && length(v) == 1L, params)
+}
+
+# A nonnegative whole count, or NA.
+.fg_count_or_na <- function(x) {
+  x <- suppressWarnings(as.numeric(x %||% NA_real_)[1])
+  if (is.na(x) || !is.finite(x) || x < 0 || x != floor(x)) NA_real_ else x
+}
+
+# One call's record from its configuration, messages, and context, and the
+# response it returned or the error it raised. A response is an
+# llmr_response, a one-row runner frame, or one row of a broadcast result as
+# a list.
+.fg_call_record <- function(config, messages, context = list(),
+                            response = NULL, error = NULL) {
+  row <- if (is.data.frame(response)) .fg_usage_rows(response)[[1]] else response
+  field <- function(name) {
+    value <- if (is.list(row) && name %in% names(row)) row[[name]] else NULL
+    if (!length(value) || (is.atomic(value) && is.na(value[[1]]))) NA else value[[1]]
+  }
+  counts <- if (is.null(response)) list(sent = NA, rec = NA, total = NA) else
+    suppressWarnings(.fg_normalize_usage(row))
+  reasoning <- if (inherits(response, "llmr_response")) {
+    tryCatch(LLMR::tokens(response)$reasoning, error = function(e) NA)
+  } else field("reasoning_tokens") %|NA|% field("reasoning")
+  thinking <- if (inherits(response, "llmr_response")) response$thinking else
+    field("thinking") %|NA|% (if (is.list(row) && is.list(row$response) &&
+                                 length(row$response) && is.list(row$response[[1]]))
+      row$response[[1]]$thinking else NA)
+  raw_text <- if (is.null(response)) NA_character_ else
+    if (is.list(row) && !inherits(response, "llmr_response") &&
+        "response_text" %in% names(row)) as.character(field("response_text")) else
+      .fg_raw_text(response)
+  list(
+    call_type = as.character(context$type %||% NA_character_),
+    agent_id = as.character(context$agent_id %||% NA_character_),
+    attempt = as.integer(context$attempt %||% 1L),
+    provider = as.character(config$provider %||% NA_character_),
+    model = as.character(config$model %||% NA_character_),
+    settings = .fg_call_settings(config),
+    messages = lapply(messages, function(m) m[intersect(c("role", "content"), names(m))]),
+    raw_text = as.character(raw_text),
+    thinking = as.character(thinking %||% NA_character_)[1],
+    cleaned_text = NA_character_,
+    score = NA_real_,
+    finish_reason = if (is.null(response)) NA_character_ else .fg_response_finish(response),
+    response_id = as.character(field("response_id")),
+    duration_s = suppressWarnings(as.numeric(field("duration_s") %|NA|% field("duration"))),
+    sent_tokens = .fg_count_or_na(counts$sent),
+    rec_tokens = .fg_count_or_na(counts$rec),
+    total_tokens = .fg_count_or_na(counts$total),
+    reasoning_tokens = .fg_count_or_na(reasoning),
+    error = if (is.null(error)) NA_character_ else conditionMessage(error),
+    timestamp = Sys.time()
+  )
+}
+
+# An empty session record.
+.fg_empty_records <- function() {
+  list(calls = list(), routing = list(), probes = list(), injections = list(),
+       info = list())
+}
+
+# The versions a session record names.
+.fg_versions <- function() {
+  version_of <- function(pkg) {
+    tryCatch(as.character(utils::packageVersion(pkg)),
+             error = function(e) NA_character_)
+  }
+  list(FocusGroup = version_of("FocusGroup"), LLMR = version_of("LLMR"),
+       R = paste(R.version$major, R.version$minor, sep = "."))
+}
+
+# NA-coalescing: `y` when `x` is NULL or NA.
+`%|NA|%` <- function(x, y) {
+  if (is.null(x) || !length(x) || (is.atomic(x) && is.na(x[[1]]))) y else x
+}
+
+# Signal a call record to a running session. Returns the handle that later
+# notes on the same call use; outside a session the handle stays unindexed
+# and notes are ignored.
+.fg_emit_call <- function(record) {
+  handle <- new.env(parent = emptyenv())
+  signalCondition(structure(
+    list(message = "Model call", record = record, handle = handle),
+    class = c("focusgroup_call", "condition")))
+  handle
+}
+
+# Add fields, such as `cleaned_text` or `score`, to the record of the call
+# that returned `response`.
+.fg_note_call <- function(response, ...) {
+  handle <- attr(response, "focusgroup_call", exact = TRUE)
+  if (is.null(handle) || is.null(handle$index)) return(invisible(NULL))
+  signalCondition(structure(
+    list(message = "Model call note", handle = handle, fields = list(...)),
+    class = c("focusgroup_call_note", "condition")))
+  invisible(NULL)
+}
+
+# ---- Token & parsing utilities ---------------------------------------------
+
+# Dispatch one request and record its returned usage before validating output.
+# `.call` describes the call for the session record: its `type`, `agent_id`,
+# and `attempt`. A live call leaves the random-number state as it was; a
+# runner is the caller's code and runs as written.
+.fg_call_llm <- function(config, messages, .runner = NULL, ..., .usage = NULL,
+                         .call = NULL) {
+  publish <- function(usage) {
+    if (!is.null(.usage)) .usage(usage)
+    signalCondition(structure(list(message = "Model usage", usage = usage),
+                              class = c("focusgroup_usage", "condition")))
+  }
+  out <- tryCatch({
+    if (is.null(.runner)) {
+      # A provider's retries draw random waits; the random-number stream is
+      # left as it was, so that a retry does not shift the session's later
+      # speaker draws or break the common random numbers of arms.
+      withr::with_preserve_seed(
+        LLMR::call_llm_robust(config = config, messages = messages, ...))
+    } else {
+      if (!is.function(.runner)) {
+        stop("`.runner` must be `NULL` or a function.", call. = FALSE)
+      }
+      experiments <- data.frame(.experiment_id = 1L)
+      experiments$config <- I(list(config))
+      experiments$messages <- I(list(messages))
+      .runner(experiments, ...)
+    }
+  }, error = function(e) {
+    publish(.fg_usage_unavailable())
+    .fg_emit_call(.fg_call_record(config, messages, .call, error = e))
+    stop(e)
+  })
+  publish(attr(out, "focusgroup_usage", exact = TRUE) %||% .fg_usage_record(out))
+  handle <- .fg_emit_call(tryCatch(
+    .fg_call_record(config, messages, .call, response = out),
+    error = function(e) .fg_call_record(config, messages, .call, error = simpleError(
+      paste("The call returned, but its record could not be built:", conditionMessage(e))))))
+  if (!is.null(handle$index)) {
+    out <- withCallingHandlers(
+      .fg_validate_reply(out, .runner),
+      error = function(e) .fg_note_call(structure(list(), focusgroup_call = handle),
+                                        error = conditionMessage(e)))
+    attr(out, "focusgroup_call") <- handle
+    return(out)
+  }
+  .fg_validate_reply(out, .runner)
+}
+
+# Check a reply's shape and success; returns it unchanged.
+.fg_validate_reply <- function(out, .runner) {
+  if (!is.null(.runner)) {
+    required <- c("config", "messages", "response_text")
+    if (!is.data.frame(out) || nrow(out) != 1L ||
+        !all(required %in% names(out))) {
+      stop("`.runner` must return the experiment rows with `config`, `messages`, and `response_text` columns.",
+           call. = FALSE)
+    }
+  }
+  if (is.data.frame(out) && nrow(out) == 1L) {
+    if ("success" %in% names(out) && !isTRUE(out$success[[1]])) {
+      reason <- "The runner reported an unsuccessful model call."
+      for (field in c("error_message", "error")) {
+        value <- out[[field]]
+        if (length(value) && !is.na(value[[1]]) && nzchar(as.character(value[[1]]))) {
+          reason <- as.character(value[[1]])
+          break
+        }
+      }
+      rlang::abort(as.character(reason[[1]]), class = "focusgroup_model_error",
+                   response = out)
+    }
+    if ("response_text" %in% names(out) && is.na(out$response_text[[1]])) {
+      stop("`.runner` returned a missing `response_text`.", call. = FALSE)
+    }
+  }
+  out
+}
+
+# The reply's final answer: its text with any reasoning written into it
+# removed. Reasoning a provider returns separately (the `thinking` field of
+# an llmr_response, or a runner's `thinking` column) is never part of it.
 .fg_response_text <- function(response_obj) {
+  .fg_final_answer(.fg_raw_text(response_obj))
+}
+
+# The reply text as returned, before reasoning or anything else is removed.
+.fg_raw_text <- function(response_obj) {
   if (is.data.frame(response_obj) && "response_text" %in% names(response_obj)) {
     text <- as.character(response_obj$response_text[[1]])
     return(if (!length(text) || is.na(text)) "" else text)
@@ -228,49 +981,125 @@ estimate_tokens <- function(text) {
   as.integer(nchar(as.character(text)[1]) / 4)
 }
 
-#' Extract token counts from an LLM response-like object
-#' @keywords internal
-extract_token_counts <- function(response_obj) {
-  empty_usage <- list(sent = 0L, rec = 0L, total = 0L)
+# Read one call's sent, received, and total counts from a response object or
+# from one row of a result frame. A count that is absent stays NA rather than
+# becoming 0; a count that is present but not a nonnegative whole number is
+# treated as NA with a warning. A missing total is the sum of the two parts
+# when both are known.
+.fg_normalize_usage <- function(response) {
+  if (inherits(response, "llmr_response")) {
+    response <- tryCatch(LLMR::tokens(response), error = function(e) {
+      warning("Token usage could not be read from the response; its counts are treated as unknown.",
+              call. = FALSE)
+      list()
+    })
+  }
+  pick <- function(aliases) {
+    if (is.list(response)) {
+      for (name in aliases) if (name %in% names(response)) return(response[[name]])
+    }
+    NULL
+  }
+  count <- function(x, name) {
+    if (is.null(x) || !length(x)) return(NA_real_)
+    if (length(x) == 1L && !is.factor(x) &&
+        (is.numeric(x) || is.logical(x)) && !is.complex(x) &&
+        is.null(dim(x)) && is.na(x) && !is.nan(x)) {
+      return(NA_real_)
+    }
+    if (!is.numeric(x) || is.factor(x) || is.complex(x) ||
+        !is.null(dim(x)) || length(x) != 1L || !is.finite(x) ||
+        x < 0 || x != floor(x)) {
+      warning(sprintf("Token count `%s` is not a finite nonnegative whole number; it is treated as unknown.",
+                      name), call. = FALSE)
+      return(NA_real_)
+    }
+    as.double(x)
+  }
+  sent <- count(pick(c("sent", "sent_tokens", "prompt_tokens", "input_tokens")), "sent")
+  rec <- count(pick(c("rec", "rec_tokens", "completion_tokens", "output_tokens")), "rec")
+  total <- count(pick(c("total", "total_tokens")), "total")
+  if (is.na(total) && !is.na(sent) && !is.na(rec)) {
+    total <- count(sent + rec, "total")
+  }
+  list(sent = sent, rec = rec, total = total)
+}
 
-  # Only trust LLMR::tokens() for a single llmr_response. For a
-  # call_llm_broadcast()/call_llm_par() result (a data.frame/tibble),
-  # LLMR::tokens(df) returns all-NA, which previously coerced to zero and
-  # returned early -- silently dropping broadcast desire-scoring usage. For a
-  # data.frame fall through to the explicit per-row column handling below.
-  if (inherits(response_obj, "llmr_response")) {
-    llmr_usage <- tryCatch(
-      if (requireNamespace("LLMR", quietly = TRUE)) LLMR::tokens(response_obj) else NULL,
-      error = function(...) NULL)
-    if (!is.null(llmr_usage)) {
-      na0 <- function(x) { v <- suppressWarnings(as.integer(x)); v[is.na(v)] <- 0L; v }
-      sent <- sum(na0(llmr_usage$sent %||% llmr_usage$prompt_tokens %||% 0L))
-      rec <- sum(na0(llmr_usage$rec %||% llmr_usage$completion_tokens %||% 0L))
-      total <- llmr_usage$total %||% (sent + rec)
-      return(list(sent = sent, rec = rec, total = sum(na0(total))))
+# Split a response into one element per call: the rows of a result frame, the
+# elements of a list of columns as long as its response vector, or the
+# response itself.
+.fg_usage_rows <- function(response) {
+  if (is.data.frame(response)) {
+    return(lapply(seq_len(nrow(response)), function(i) {
+      lapply(response, function(x) x[i][[1]])
+    }))
+  }
+  # Column lists are call-level only when a response vector establishes rows.
+  if (is.list(response) && !inherits(response, "llmr_response") &&
+      length(response$response_text) > 1L) {
+    n <- length(response$response_text)
+    fields <- intersect(names(response), c("sent", "rec", "total", "sent_tokens",
+      "rec_tokens", "total_tokens", "prompt_tokens", "completion_tokens",
+      "input_tokens", "output_tokens"))
+    if (all(lengths(response[fields]) == n)) {
+      return(lapply(seq_len(n), function(i) lapply(response, function(x) {
+        if (length(x) == n) x[i][[1]] else NULL
+      })))
     }
   }
+  list(response)
+}
 
-  if (!is.list(response_obj)) return(empty_usage)
-
-  # Read a field by name across the candidate aliases, taking the first that is
-  # present. Accessing a missing column with `$` on a tibble warns ("Unknown or
-  # uninitialised column"); checking names() first avoids that for the
-  # broadcast/parallel data-frame path while behaving identically for a plain list.
-  nm <- names(response_obj)
-  pick <- function(aliases, default = 0L) {
-    for (a in aliases) if (a %in% nm) return(response_obj[[a]])
-    default
+# The usage record of a response: one call per row, with each call's missing
+# components counted. A record already attached by a recorder is reused, so a
+# call is never counted twice.
+.fg_usage_record <- function(response) {
+  cached <- attr(response, "focusgroup_usage", exact = TRUE)
+  if (!is.null(cached)) return(cached)
+  usage <- .fg_usage_empty()
+  for (row in .fg_usage_rows(response)) {
+    counts <- .fg_normalize_usage(row)
+    record <- .fg_usage_empty()
+    for (name in names(counts)) {
+      record[[name]] <- .fg_tok0(counts[[name]])
+      record[[paste0(name, "_unknown")]] <- as.double(is.na(counts[[name]]))
+    }
+    record$unknown <- as.double(anyNA(counts))
+    record$calls <- 1
+    usage <- .fg_usage_merge(usage, record)
   }
-  sent <- pick(c("sent", "sent_tokens", "prompt_tokens", "input_tokens"))
-  rec  <- pick(c("rec", "rec_tokens", "completion_tokens", "output_tokens"))
-  tot  <- pick(c("total", "total_tokens"), NA_integer_)
+  usage
+}
 
-  sent <- sum(suppressWarnings(as.integer(sent)), na.rm = TRUE)
-  rec <- sum(suppressWarnings(as.integer(rec)), na.rm = TRUE)
-  tot <- sum(suppressWarnings(as.integer(tot)), na.rm = TRUE)
-  if (tot == 0L) tot <- sent + rec
-  list(sent = sent, rec = rec, total = tot)
+#' Extract token counts from an LLM response-like object
+#'
+#' Reads the token usage of the calls in a response: an `llmr_response`, a
+#' result data frame with one row per call, or a list of token fields.
+#'
+#' Each call's counts are read separately. A count the call did not report is
+#' unknown and adds nothing to the subtotals; a count that is not a nonnegative
+#' whole number is treated as unknown, with a warning. A call's total is its
+#' reported total, or the sum of its sent and received counts when both are
+#' known.
+#'
+#' @param response_obj A response, a result data frame, or a list of token
+#'   fields.
+#' @return A list with the subtotals `sent`, `rec`, and `total` of the
+#'   reported counts; `unknown`, the number of calls with any count missing;
+#'   and `sent_unknown`, `rec_unknown`, and `total_unknown`, the number of
+#'   calls missing each count.
+#' @keywords internal
+extract_token_counts <- function(response_obj) {
+  .fg_usage_record(response_obj)[c("sent", "rec", "total", "unknown",
+                                 "sent_unknown", "rec_unknown", "total_unknown")]
+}
+
+# A message's token count: the subtotal when every call behind the message
+# reported it, otherwise NA. Integer when it fits.
+.fg_message_count <- function(usage, name) {
+  if (!isTRUE(usage[[paste0(name, "_unknown")]] == 0)) return(NA_integer_)
+  value <- usage[[name]]
+  if (value <= .Machine$integer.max) as.integer(value) else value
 }
 
 #' Parse a 0-10 integer score from free text
@@ -300,6 +1129,72 @@ parse_score_0_10 <- function(text) {
   val <- as.integer(hits[length(hits)])
   if (is.na(val)) return(NA_integer_)
   clamp(val)
+}
+
+# Remove a leading persona self-introduction ("As a retired teacher, ...")
+# from a participant's reply. Only a short clause is removed: "As a" or "As
+# an" with one to four words and a comma, or "As the" with one word or a
+# phrase with "of" ("As the youngest,", "As the mother of two,"). A longer
+# clause, or one with a pronoun or a clause word in it ("As a teacher I
+# grade papers at night, ...", "As a nurse who works nights, ..."), is the
+# participant's own statement and the reply is kept as written; so is "As
+# the city grows, ...". The same grammatical form also opens ordinary
+# discourse ("As a result, ...", "As the saying goes, ...") and states a
+# time of life or a group ("As a child, ...", "As a family, ..."), and those
+# openings are content, so a clause whose head is such a word, or one that
+# reports what someone said, is kept. Some such words also head a role ("As
+# an alternative medicine practitioner, ..."), and they count as discourse
+# only when the comma follows them ("As an alternative, ...").
+.fg_discourse_as <- paste0(
+  "^As\\s+(",
+  "(a|an)\\s+(result|consequence|rule|whole|aside|example|reminder|",
+  "matter\\s+of|side\\s+note|general\\s+rule|first\\s+step|last\\s+resort|",
+  "starting\\s+point|follow-up|final\\s+(thought|point|note)|",
+  "quick\\s+(note|aside|reminder)|bonus|counterpoint|practical\\s+matter|",
+  "point\\s+of|society|group|community|country|nation|team|precaution|",
+  "family|household|couple|kid|child|teen|teenager|youngster|",
+  "compromise|baseline|case\\s+in\\s+point)\\b",
+  "|(a|an)\\s+(illustration|alternative|side\\s+effect|comparison|start|test|",
+  "thought\\s+experiment|policy)\\s*,",
+  "|the\\s+(saying|old\\s+saying|proverb|expression|phrase|name|title|",
+  "moderator|question|discussion|conversation|group|others?|previous|last|",
+  "earlier|data|evidence|research|record|numbers|article)\\b",
+  "|the\\b[^,]*\\b(said|says|noted|notes|mentioned|mentions|pointed\\s+out|",
+  "points\\s+out|put\\s+it|puts\\s+it|suggested|suggests|goes|asked|asks|",
+  "argued|argues|shows|showed)\\b",
+  ")")
+
+.fg_role_intro <- paste0(
+  "^As\\s+(?:an?|the)\\s+",
+  "((?:[a-z0-9][a-z0-9'-]*\\s+){0,3}[a-z0-9][a-z0-9'-]*)\\s*,\\s*")
+
+.fg_intro_stopwords <- c(
+  "i", "i'm", "i've", "i'd", "i'll", "me", "my", "we", "we're", "we've", "us",
+  "our", "you", "you're", "your", "he", "him", "his", "she", "her", "they",
+  "they're", "them", "their", "it", "it's", "its", "who", "whom", "whose",
+  "which", "that", "where", "when", "while", "because", "since", "so", "if")
+
+.fg_strip_role_preamble <- function(text) {
+  text <- as.character(text)
+  hit <- regexec(.fg_role_intro, text, ignore.case = TRUE, perl = TRUE)
+  clause <- vapply(regmatches(text, hit), function(m) if (length(m)) m[[2]] else NA_character_,
+                   character(1))
+  words <- strsplit(tolower(clause), "\\s+")
+  article_the <- grepl("^As\\s+the\\s", text, ignore.case = TRUE, perl = TRUE)
+  phrase <- vapply(words, function(w) length(w) == 1L || "of" %in% w, logical(1))
+  intro <- !is.na(clause) &
+    !vapply(words, function(w) any(w %in% .fg_intro_stopwords), logical(1)) &
+    (!article_the | phrase) &
+    !grepl(.fg_discourse_as, text, ignore.case = TRUE, perl = TRUE)
+  text[intro] <- sub(.fg_role_intro, "", text[intro], ignore.case = TRUE, perl = TRUE)
+  text
+}
+
+# A reply with a leading persona introduction removed, unless what would
+# remain is shorter than 20 characters, in which case it is kept whole.
+.fg_without_preamble <- function(text) {
+  cleaned <- .fg_strip_role_preamble(text)
+  if (!is.na(cleaned) && nchar(cleaned) >= 20L) cleaned else text
 }
 
 # Word count that a blank string cannot inflate: an empty or whitespace-only
@@ -490,66 +1385,18 @@ replace_placeholders_known <- function(template_string, values_list) {
 # list of entries with message_id/round/speaker_id/text/is_moderator). Accepts a FocusGroup
 # (its log is returned as-is), an already-shaped list, or a data frame with a
 # speaker and a text column (named explicitly or auto-detected from common
-# names). Shared by the GUI's Analyze tab and focus_group_from_transcript().
-# Data-frame rows get phase "imported" so phase-aware analyses and plots have a
-# value to group on; a speaker whose id contains "mod" (case-insensitive) is
-# flagged as the moderator, the convention human transcripts most often follow.
+# names). A data frame goes through .fg_import_log(), the conversion that
+# focus_group_from_transcript() uses, so supplied fields and moderator flags
+# are read the same way in both.
 .fg_as_log <- function(obj, speaker_col = NULL, text_col = NULL,
                        moderator_id = NULL) {
   if (inherits(obj, "FocusGroup")) return(obj$conversation_log)
   if (is.list(obj) && !is.data.frame(obj) && length(obj) &&
       is.list(obj[[1]]) && !is.null(obj[[1]]$text)) return(obj)
   if (is.data.frame(obj)) {
-    sc <- speaker_col %||% intersect(c("speaker_id","speaker","agent","role"), names(obj))[1]
-    tc <- text_col %||% intersect(c("text","utterance","message","content"), names(obj))[1]
-    valid_name <- function(x) {
-      is.character(x) && length(x) == 1L && !is.na(x) && nzchar(x)
-    }
-    if (!valid_name(sc) || !valid_name(tc)) {
-      stop("Could not find speaker and text columns.", call. = FALSE)
-    }
-    if (!all(c(sc, tc) %in% names(obj)))
-      stop("Columns '", sc, "' and '", tc, "' must both be present in the transcript.",
-           call. = FALSE)
-    speakers <- as.character(obj[[sc]])
-    moderator_flags <- if (!is.null(moderator_id)) {
-      speakers == moderator_id
-    } else {
-      # Exact alias match, never a substring: "Modesto" is not a moderator.
-      aliases <- c("mod", "moderator", "facilitator", "interviewer")
-      flags <- tolower(trimws(speakers)) %in% aliases
-      if (sum(unique(speakers[flags]) %in% speakers) > 1L &&
-          length(unique(speakers[flags])) > 1L) {
-        stop(paste(
-          "More than one speaker matches a moderator alias;",
-          "supply `moderator_id`."), call. = FALSE)
-      }
-      flags
-    }
-    rounds <- cumsum(moderator_flags)
-    return(lapply(seq_len(nrow(obj)), function(i) {
-      speaker <- as.character(obj[[sc]][i])
-      text <- as.character(obj[[tc]][i])
-      if (is.na(text)) text <- ""
-      list(
-        message_id = as.integer(i),
-        round = as.integer(rounds[[i]]),
-        speaker_id = speaker,
-        text = text,
-        is_moderator = isTRUE(moderator_flags[[i]]),
-        timestamp = as.POSIXct(NA),
-        phase = "imported",
-        response_id = NA_character_,
-        finish_reason = NA_character_,
-        sent_tokens = 0L,
-        rec_tokens = 0L,
-        total_tokens = 0L,
-        duration_s = NA_real_,
-        provider = NA_character_,
-        model = NA_character_,
-        metadata = list()
-      )
-    }))
+    sc <- speaker_col %||% intersect(c("speaker_id", "speaker", "agent", "role"), names(obj))[1]
+    tc <- text_col %||% intersect(c("text", "utterance", "message", "content"), names(obj))[1]
+    return(.fg_import_log(obj, sc, tc, moderator_id))
   }
   stop("Unrecognized transcript format.", call. = FALSE)
 }
@@ -625,18 +1472,24 @@ replace_placeholders_known <- function(template_string, values_list) {
 
 # Strip a session of everything a saved file must not carry: model
 # configurations (which may hold a literal key) and runner closures (which
-# may hold live GUI state). The running session is untouched; agents are
-# cloned before the fields are cleared. Continuation work re-supplies a
-# configuration when it generates.
+# may hold live GUI state), on the roster and on the turn-taking flow's copy
+# of it. The running session is untouched; agents and the flow are cloned
+# before the fields are cleared. The roster's provenance attributes and the
+# session status are kept. Continuation work re-supplies a configuration when
+# it generates.
 .fg_sanitize_session <- function(fg) {
   stopifnot(inherits(fg, "FocusGroup"))
   out <- fg$clone(deep = FALSE)
   out$agents <- lapply(fg$agents, function(a) {
     b <- a$clone(deep = FALSE)
-    b$config <- NULL
-    b$.runner <- NULL
+    if ("config" %in% names(b)) b$config <- NULL
+    if (".runner" %in% names(b)) b$.runner <- NULL
     b
   })
+  attributes(out$agents) <- attributes(fg$agents)
+  out$turn_taking_flow <- fg$turn_taking_flow$clone(deep = FALSE)
+  out$turn_taking_flow$agents <- out$agents
+  attr(out, "session_status") <- attr(fg, "session_status")
   out$admin_config <- NULL
   out
 }

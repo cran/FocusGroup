@@ -12,32 +12,33 @@ generate_persona(
 }
 \arguments{
 \item{demographics}{A named list (or single-row data frame coerced to one) of
-demographic fields, e.g. `list(age = 63, education = "High school",
-region = "South")`. Field names are shown to the model as written.}
+demographic fields, e.g. \code{list(age = 63, education = "High school", region = "South")}. Field names are shown to the model as written.}
 
 \item{survey_responses}{Optional named list of survey responses, keyed by the
-question text: `list("Party identification" = "Strong Democrat")`.}
+question text: \code{list("Party identification" = "Strong Democrat")}.}
 
-\item{style}{One of `"labeled"` (default) or `"paragraph"`. `"labeled"` lists
-the demographics and then a Question/Answer block; `"paragraph"` fuses them
+\item{style}{One of \code{"labeled"} (default) or \code{"paragraph"}. \code{"labeled"} lists
+the demographics and then a Question/Answer block; \code{"paragraph"} fuses them
 into a single natural paragraph. Defaults to
-`getOption("focusgroup.persona_style", "labeled")`.}
+\code{getOption("focusgroup.persona_style", "labeled")}.}
 }
 \value{
 Character string with the persona description.
 }
 \description{
-Renders the persona text for a synthetic participant from the demographics and
-survey responses the researcher supplied. It states those facts and nothing
-more: what a given age, education, place of residence, or survey answer implies
-about a person is left to the model, not decided here. Mapping a demographic
-label to a fixed disposition is the essentialism a research instrument should
-avoid, so the package does not do it.
+Renders the persona text for a simulated participant from the demographics
+and survey responses the researcher supplied. It states those facts and
+nothing more: what a given age, education, place of residence, or survey
+answer implies about a person is left to the model, not decided here.
+Mapping a demographic label to a fixed disposition is the essentialism a
+research instrument should avoid, so the package does not do it.
 }
 \details{
 Both the demographics and the survey responses are rendered in full (every
-supplied field), not a fixed subset. Pass survey responses keyed by the
-question wording (for survey-file input, the variable label is used as the key)
-so the model sees the item, not a code name.
+supplied field), not a fixed subset; fields that are missing or empty are
+left out rather than rendered as "NA". Pass survey responses keyed by the
+question wording (for survey-file input, \code{question_wording}, the names of
+\code{survey_vars}, or the variable label is used as the key) so the model sees
+the item, not a code name.
 }
 \keyword{internal}

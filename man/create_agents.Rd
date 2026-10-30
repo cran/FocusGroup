@@ -10,32 +10,56 @@ create_agents(
   demographics = NULL,
   survey_responses = NULL,
   direct_persona_descriptions = NULL,
+  na_strings = fg_default_na_strings(),
   .runner = NULL
 )
 }
 \arguments{
 \item{n_participants}{Integer number of participants to create}
 
-\item{config}{An explicit `LLMR::llm_config` for all agents.}
+\item{config}{An explicit \code{LLMR::llm_config} for all agents.}
 
 \item{demographics}{Optional data frame, one row per participant. When it,
-`survey_responses`, and `direct_persona_descriptions` are all NULL,
-participants are drawn from the bundled ANES 2024 records.}
+\code{survey_responses}, and \code{direct_persona_descriptions} are all NULL,
+participants are drawn from the bundled ANES 2024 records. Columns with
+value labels (class \code{haven_labelled}) are an error unless the personas
+are supplied: \code{\link[=create_agents_from_data]{create_agents_from_data()}} renders them, where this
+function would show their codes.}
 
 \item{survey_responses}{Optional data frame of survey answers, one row per
-participant.}
+participant, with value labels treated as for \code{demographics}.}
 
 \item{direct_persona_descriptions}{Optional character vector of pre-rendered
 participant personas. When supplied, these descriptions are used directly
 and are recycled in order if necessary. Demographics and survey responses
 remain attached as raw reporting fields.}
 
+\item{na_strings}{Character vector of regular expressions, matched ignoring
+case, that mark a text or factor value of \code{demographics} or
+\code{survey_responses} as a missing-data label, which the persona leaves
+out, by the rule described under Rendering answers in
+\code{\link[=create_agents_from_survey]{create_agents_from_survey()}}: a value that matches and starts with a
+negative code or one of 90 and above ("-9. Refused", "[-8] Don't know",
+"97. Refused"), or one that says nothing but the matched wording
+("Refused to answer", "Don't know (VOL)"). Answers that use such words
+("I keep missing the bus", "2. Refused to take sides") are kept, and
+numbers are never read this way. Each value left out is recorded in the
+rendering report, with a message naming the fields. The default is
+\code{\link[=fg_default_na_strings]{fg_default_na_strings()}}; \code{character()} turns the screening off.}
+
 \item{.runner}{Optional function used instead of live model calls and stored
 on every agent.}
 }
 \value{
 A named list of FGAgent objects (participants + 1 moderator), keyed
-  by agent ID.
+by agent ID. When the participants are drawn from the bundled ANES
+records, the list carries the \code{source_rows} attribute described in
+\code{\link[=create_agents_from_survey]{create_agents_from_survey()}}, giving the rows of
+\link{anes_2024_personas} that were drawn. Unless the personas are
+given in \code{direct_persona_descriptions}, the list also carries a
+\code{rendering_report} attribute recording each field supplied for each
+participant and whether the persona shows it; see
+\code{\link[=persona_rendering_report]{persona_rendering_report()}}.
 }
 \description{
 Creates participant agents from supplied records, direct personas, or

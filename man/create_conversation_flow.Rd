@@ -10,19 +10,27 @@ create_conversation_flow(mode, agents, moderator_id, flow_params = list())
 \item{mode}{Character. The type of turn-taking flow to create.
 Supported: "round_robin", "probabilistic", "desire_based".}
 
-\item{agents}{A named list of `FGAgent` objects.}
+\item{agents}{A named list of \code{FGAgent} objects.}
 
 \item{moderator_id}{Character. The ID of the moderator agent.}
 
 \item{flow_params}{List. Additional parameters specific to the chosen flow type.
-For "probabilistic": `initial_propensities` (named numeric vector), `recovery_increment` (numeric).
-For "desire_based": `min_desire_threshold` (numeric).}
+For "probabilistic": \code{initial_propensities} (named numeric vector), \code{recovery_increment} (numeric).
+For "desire_based": \code{min_desire_threshold} (numeric) and
+\code{on_desire_failure}, \code{"error"} (the default) or \code{"random"}. Under
+\code{"error"} a desire score that cannot be obtained, after its retry, stops
+the session with an error of class \code{focusgroup_desire_failure}. Under
+\code{"random"} the speaker is chosen among the participants with valid
+scores by the usual rule, and uniformly among the eligible participants
+only when none has a valid score; the failure is recorded in the
+selected message's \code{metadata$desire_scoring_failure}. Earlier versions
+always chose uniformly at random when any score failed.}
 }
 \value{
-An initialized `ConversationFlow` object (e.g., `RoundRobinFlow`, `ProbabilisticFlow`, `DesireBasedFlow`).
+An initialized \code{ConversationFlow} object (e.g., \code{RoundRobinFlow}, \code{ProbabilisticFlow}, \code{DesireBasedFlow}).
 }
 \description{
-Factory function to create an instance of a `ConversationFlow` subclass.
+Factory function to create an instance of a \code{ConversationFlow} subclass.
 }
 \examples{
 cfg <- LLMR::llm_config("groq", "openai/gpt-oss-20b",

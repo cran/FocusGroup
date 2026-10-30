@@ -23,8 +23,16 @@ NULL
 #'   those rows with at least `response_text`.
 #' @field is_moderator Logical. `TRUE` if the agent is the moderator, `FALSE` otherwise.
 #' @field history List. A log of utterances made by this agent during the simulation.
-#' @field tokens_sent_agent Numeric. Total tokens sent by this agent.
-#' @field tokens_received_agent Numeric. Total tokens received by this agent.
+#' @field tokens_sent_agent Numeric. Tokens sent by this agent's calls, as
+#'   reported; calls that reported no count add nothing.
+#' @field tokens_received_agent Numeric. Tokens received by this agent's calls,
+#'   as reported.
+#' @field tokens_total_agent Numeric. Total tokens of this agent's calls: each
+#'   call's reported total, or its sent and received counts when it reported
+#'   no total.
+#' @field usage_unknown_agent Numeric. Number of this agent's calls whose usage
+#'   was incomplete, so that the three token fields are lower bounds when it is
+#'   positive; `NA` when that number cannot be determined.
 #'
 #' @section Customizing Agents:
 #' `FGAgent` is designed to be flexible:
@@ -64,10 +72,17 @@ FGAgent <- R6::R6Class("FGAgent",
     demographics = NULL,
     #' @field survey_responses Named list. Raw survey responses used to build persona.
     survey_responses = NULL,
+    #' @field handle Character or `NULL`. The label under which this agent
+    #'   appears in the discussion and by which it recognizes its own turns,
+    #'   set by [FocusGroup] from its `handles`; `NULL` outside a session,
+    #'   when `id` is used.
+    handle = NULL,
     is_moderator = FALSE,
     history = list(),
     tokens_sent_agent = 0,
     tokens_received_agent = 0,
+    tokens_total_agent = 0,
+    usage_unknown_agent = 0,
 
     #' @description Initialize a new FGAgent.
     #' @param id Character. A unique identifier for the agent.
@@ -111,6 +126,8 @@ FGAgent <- R6::R6Class("FGAgent",
       self$history <- list()
       self$tokens_sent_agent <- 0
       self$tokens_received_agent <- 0
+      self$tokens_total_agent <- 0
+      self$usage_unknown_agent <- 0
 
       persona_elements <- private$construct_persona_elements(agent_details, is_moderator)
       self$persona_description <- persona_elements$description
@@ -129,19 +146,38 @@ FGAgent <- R6::R6Class("FGAgent",
     #' @param current_moderator_question Character. The current question posed by the moderator.
     #' @param conversation_summary_so_far Character. A summary of earlier parts of the conversation.
     #' @param current_phase Character. The current phase of the focus group (e.g., "icebreaker", "exploration").
-    #' @param conversation_log List or NULL. The structured conversation log. When
+    #' @param conversation_log List or NULL. The structured conversation log,
+    #'   with speakers under the labels this agent is to see. When
     #'   supplied (and the template is not a legacy flat template), the message is
-    #'   built role-flipped: this agent's own prior turns become `assistant`
+    #'   built role-flipped: this agent's own prior turns, those under its
+    #'   `handle` (or, without one, its `id`), become `assistant`
     #'   messages and others' become labeled `user` messages. `NULL` keeps the
-    #'   legacy flat single-user-message construction.
+    #'   legacy flat single-user-message construction. In a session, the flat
+    #'   message of a participant opens with the sentence that tells it its
+    #'   handle ("In this discussion you are P3.").
     #' @param standing_rules Character or NULL. The system-message standing rules
     #'   (persona-anchoring, safety, etc.) for the role-flipped path; `NULL` uses a
     #'   built-in default appropriate to the agent's role.
     #' @param self_state Logical. If `TRUE` (default), a compact "points you have
     #'   already made" digest of the agent's own prior turns is added to the system
     #'   message (participants only) to discourage self-repetition.
+    #' @param call_params Optional named list of model parameters written over
+    #'   the agent's configuration for this utterance and its retry, such as
+    #'   `list(reasoning_effort = "low")`.
     #' @return A list with `text` (the generated utterance) and `meta` (a list
-    #'   of call metadata: token counts, finish reason, provider, model, timing).
+    #'   of call metadata: `response_id`, `finish_reason`, `sent_tokens`,
+    #'   `rec_tokens`, `total_tokens`, `usage_unknown`, `duration_s`,
+    #'   `provider`, `model`, and `metadata`). The token counts cover the first call and,
+    #'   when the reply was incomplete, its retry; each is `NA` unless every
+    #'   one of those calls reported it, and `usage_unknown` counts the calls
+    #'   whose usage was incomplete. The other fields describe the final reply.
+    #'   A label the agent wrote for itself at the start of the reply, such as
+    #'   `P3:` or `**MOD:**`, is removed from `text`, and `metadata` then
+    #'   holds `self_label_removed = TRUE`; another speaker's label is kept.
+    #'   A short opening self-introduction ("As a retired nurse, ") is
+    #'   removed too, and `metadata` then holds `preamble_removed = TRUE`; a
+    #'   longer opening clause, or one that is part of the statement, is kept.
+    #'   The agent's token fields are updated even when the retry fails.
     generate_utterance = function(topic,
                                   conversation_history_string,
                                   utterance_prompt_template,
@@ -151,7 +187,8 @@ FGAgent <- R6::R6Class("FGAgent",
                                   current_phase = "discussion",
                                   conversation_log = NULL,
                                   standing_rules = NULL,
-                                  self_state = TRUE) {
+                                  self_state = TRUE,
+                                  call_params = NULL) {
 
       if (is.null(self$config)) {
         stop("An explicit config is required to generate an utterance.", call. = FALSE)
@@ -188,6 +225,7 @@ FGAgent <- R6::R6Class("FGAgent",
       current_config$model_params$max_tokens <-
         configured_max_tokens %||% max_tokens_utterance
       current_config$model_params$temperature <- current_config$model_params$temperature %||% 0.7
+      current_config <- .fg_with_params(current_config, call_params)
 
       # Build the messages. A legacy/custom template that inlines the transcript
       # (via {{conversation_history}}/{{persona_description}}) keeps the old
@@ -198,11 +236,13 @@ FGAgent <- R6::R6Class("FGAgent",
       legacy_template <- grepl("\\{\\{(conversation_history|persona_description)\\}\\}",
                                utterance_prompt_template)
       if (legacy_template || is.null(conversation_log)) {
-        msgs <- list(list(role = "user", content = final_prompt))
+        msgs <- .fg_flat_messages(self, final_prompt)
       } else {
         transcript <- .fg_log_to_transcript(conversation_log)
+        own <- .fg_agent_label(self)
         sys_text <- paste(c(
           self$persona_description,
+          .fg_handle_sentence(self),
           self$communication_style_instruction %||% "",
           if (!is.null(conversation_summary_so_far) &&
               nzchar(conversation_summary_so_far) &&
@@ -212,45 +252,38 @@ FGAgent <- R6::R6Class("FGAgent",
         ), collapse = "\n\n")
         instruction <- final_prompt   # the filled template = this turn's task/question
         ss <- if (isTRUE(self_state) && !self$is_moderator)
-          .fg_self_state(transcript, self$id) else NULL
-        msgs <- .fg_build_agent_messages(transcript, self$id, sys_text,
+          .fg_self_state(transcript, own) else NULL
+        msgs <- .fg_build_agent_messages(transcript, own, sys_text,
                                          instruction = instruction, self_state = ss)
       }
 
+      usage <- .fg_usage_recorder()
+      on.exit(.fg_add_agent_usage(self, usage$value()), add = TRUE)
+      call_type <- if (isTRUE(self$is_moderator)) "moderator" else "participant"
       response_obj <- .fg_call_llm(
         config = current_config,
         messages = msgs,
-        .runner = self$.runner,
+        .runner = self$.runner, .usage = usage$add,
         tries = 5,
         wait_seconds = 2,
-        backoff_factor = 3
+        backoff_factor = 3,
+        .call = list(type = call_type, agent_id = self$id, attempt = 1L)
       )
 
       utterance_text <- .fg_response_text(response_obj)
-      u <- extract_token_counts(response_obj)
-      # NA-safe: a provider that reports no usage yields NA counts, which must
-      # accumulate as 0, not turn the running totals into NA for good.
-      agg_sent <- .fg_tok0(u$sent)
-      agg_rec  <- .fg_tok0(u$rec)
-      self$tokens_sent_agent     <- self$tokens_sent_agent     + agg_sent
-      self$tokens_received_agent <- self$tokens_received_agent + agg_rec
-
-      # meta is built from aggregates after any retry so the caller always has full usage.
       final_response_obj <- response_obj
       
       # With role-flip the agent's own voice is in the assistant channel, so the
       # "As <id>..." leakage the old persona-specific rewrites fought is rare.
-      # Keep one thin guard against a leading role preamble; drop the rest.
+      # Keep one thin guard against a leading role preamble, and remove a
+      # label the agent wrote for itself ("P3:", "**MOD:**"); drop the rest.
       original_text <- utterance_text
-      cleaned <- trimws(original_text)
-      cleaned <- sub("^As\\s+(an?|the)\\b[^,]*,\\s*", "", cleaned, ignore.case = TRUE)
-      if (!nzchar(cleaned)) cleaned <- original_text
-      # Keep the longer/non-empty between cleaned and original
-      if (nchar(cleaned) >= 20 || nchar(original_text) == 0) {
-        utterance_text <- cleaned
-      } else {
-        utterance_text <- trimws(original_text)
-      }
+      labels <- .fg_self_labels(self)
+      unlabeled <- .fg_strip_self_label(trimws(original_text), labels)
+      self_label_removed <- unlabeled$removed
+      utterance_text <- .fg_without_preamble(unlabeled$text)
+      preamble_removed <- !identical(utterance_text, unlabeled$text)
+      .fg_note_call(response_obj, cleaned_text = utterance_text)
 
       # Fallback: retry once only when the model was actually cut off, returned
       # nothing, or trailed off mid-thought. A short, well-formed answer ("I
@@ -287,21 +320,18 @@ FGAgent <- R6::R6Class("FGAgent",
         response_obj2 <- .fg_call_llm(
           config = current_config,
           messages = retry_msgs,
-          .runner = self$.runner,
+          .runner = self$.runner, .usage = usage$add,
           tries = 3,
           wait_seconds = 2,
-          backoff_factor = 2
+          backoff_factor = 2,
+          .call = list(type = call_type, agent_id = self$id, attempt = 2L)
         )
-        u2 <- extract_token_counts(response_obj2)
-        retry_sent <- .fg_tok0(u2$sent)
-        retry_rec <- .fg_tok0(u2$rec)
-        agg_sent <- agg_sent + retry_sent
-        agg_rec <- agg_rec + retry_rec
-        self$tokens_sent_agent <- self$tokens_sent_agent + retry_sent
-        self$tokens_received_agent <- self$tokens_received_agent + retry_rec
-
-        cand <- trimws(.fg_response_text(response_obj2))
-        cand <- sub("^As\\s+(an?|the)\\b[^,]*,\\s*", "", cand, ignore.case = TRUE)
+        cand <- .fg_strip_self_label(trimws(.fg_response_text(response_obj2)), labels)
+        self_label_removed <- cand$removed
+        stripped <- .fg_without_preamble(cand$text)
+        preamble_removed <- !identical(stripped, cand$text)
+        cand <- stripped
+        .fg_note_call(response_obj2, cleaned_text = cand)
         retry_incomplete <- !nzchar(cand) ||
           identical(.fg_response_finish(response_obj2), "length") ||
           grepl("\\.\\.\\.\\s*$", cand)
@@ -313,15 +343,20 @@ FGAgent <- R6::R6Class("FGAgent",
         final_response_obj <- response_obj2
       }
 
+      observed <- usage$value()
       meta <- list(
         response_id   = .fg_response_field(final_response_obj, "response_id", NA_character_),
         finish_reason = .fg_response_finish(final_response_obj),
-        sent_tokens   = as.integer(agg_sent),
-        rec_tokens    = as.integer(agg_rec),
-        total_tokens  = as.integer(agg_sent + agg_rec),
+        sent_tokens   = .fg_message_count(observed, "sent"),
+        rec_tokens    = .fg_message_count(observed, "rec"),
+        total_tokens  = .fg_message_count(observed, "total"),
+        usage_unknown = observed$unknown,
         duration_s    = .fg_response_field(final_response_obj, "duration_s", NA_real_),
         provider      = self$config$provider %||% NA_character_,
-        model         = self$config$model %||% NA_character_
+        model         = self$config$model %||% NA_character_,
+        metadata      = c(if (isTRUE(self_label_removed)) list(self_label_removed = TRUE),
+                          if (isTRUE(preamble_removed)) list(preamble_removed = TRUE),
+                          list())
       )
 
       self$history <- c(self$history, list(list(topic = topic, text = utterance_text, timestamp = Sys.time(), phase = current_phase)))
@@ -336,13 +371,29 @@ FGAgent <- R6::R6Class("FGAgent",
     #' @param desire_prompt_template Character. The prompt template to use for this query.
     #' @param max_tokens_desire Integer. Maximum tokens for the LLM's response to the desire query.
     #' @param current_moderator_question Character. The current question posed by the moderator.
-    #' @param last_speaker_id Character. The ID of the agent who spoke last.
+    #' @param last_speaker_id Character. The label of the agent who spoke last,
+    #'   as the agents see it.
     #' @param last_utterance_text Character. The text of the last utterance.
-    #' @param conversation_log List or NULL. The structured conversation log. When
+    #' @param conversation_log List or NULL. The structured conversation log,
+    #'   with speakers under the labels this agent is to see. When
     #'   supplied (and the template is not a legacy flat template), desire scoring
-    #'   is role-flipped so the agent reads its own prior turns as its own voice;
+    #'   is role-flipped so the agent reads its own prior turns, those under its
+    #'   handle, as its own voice;
     #'   `NULL` keeps the legacy flat construction.
-    #' @return Numeric. A score from 0 (no desire) to 10 (very strong desire).
+    #' @param max_tokens_retry Integer or NULL. The budget of the one retry made
+    #'   when the first reply is empty or cut off; `NULL` uses 256. No retry is
+    #'   made when `max_tokens_desire` is already at least this large.
+    #' @param call_params Optional named list of model parameters written over
+    #'   the agent's configuration for these calls, such as
+    #'   `list(reasoning_effort = "low")`.
+    #' @return Numeric. A score from 0 (no desire) to 10 (very strong desire),
+    #'   read from the reply's final answer only: reasoning the provider
+    #'   returns separately, or that the model writes inside `<think>` tags or
+    #'   the gpt-oss channel markup, is never read. A reply that cannot be read
+    #'   as a score is an error; the usage of the calls made, including a
+    #'   retry, is recorded on the agent first. The configuration's
+    #'   temperature, when it sets one, is used; none is added when it does
+    #'   not.
     get_need_to_talk = function(topic,
                                 conversation_history_string,
                                 desire_prompt_template,
@@ -350,7 +401,9 @@ FGAgent <- R6::R6Class("FGAgent",
                                 current_moderator_question = "N/A",
                                 last_speaker_id = "N/A",
                                 last_utterance_text = "N/A",
-                                conversation_log = NULL) {
+                                conversation_log = NULL,
+                                max_tokens_retry = NULL,
+                                call_params = NULL) {
       if (is.null(self$config)) {
         stop("An explicit config is required for desire scoring.", call. = FALSE)
       }
@@ -368,10 +421,11 @@ FGAgent <- R6::R6Class("FGAgent",
       # Desire scoring asks for one integer, so it keeps its own small budget
       # rather than a caller's generation setting, which is sized for prose.
       current_config$model_params$max_tokens <- max_tokens_desire
-      # Do not inject a temperature for desire scoring: some reasoning models
-      # require their native temperature (e.g. 1) and the score is a single
-      # integer, so the caller's sampling setting is left untouched.
-      current_config$model_params$temperature <- NULL
+      # The configuration's temperature, if any, is kept as configured. None
+      # is added when it is unset, since some reasoning models accept only
+      # their native value.
+      current_config <- .fg_with_params(current_config, call_params)
+      retry_tokens <- max_tokens_retry %||% .fg_desire_retry_tokens
 
       # Desire scoring is still an agent-perspective judgment: if it reads its own
       # prior turns as external "SpeakerID:" text it can misjudge novelty. Role-
@@ -380,30 +434,29 @@ FGAgent <- R6::R6Class("FGAgent",
       legacy_template <- grepl("\\{\\{(conversation_history|persona_description)\\}\\}",
                                desire_prompt_template)
       if (legacy_template || is.null(conversation_log)) {
-        desire_msgs <- list(list(role = "user", content = final_prompt))
+        desire_msgs <- .fg_flat_messages(self, final_prompt)
       } else {
         transcript <- .fg_log_to_transcript(conversation_log)
-        sys_text <- paste(c(self$persona_description,
-                            "You are rating your own desire to speak next."),
-                          collapse = "\n")
-        desire_msgs <- .fg_build_agent_messages(transcript, self$id, sys_text,
+        desire_msgs <- .fg_build_agent_messages(transcript, .fg_agent_label(self),
+                                                .fg_desire_system_text(self),
                                                 instruction = final_prompt,
                                                 self_state = NULL)
       }
 
-      score_once <- function(cfg) {
+      usage <- .fg_usage_recorder()
+      on.exit(.fg_add_agent_usage(self, usage$value()), add = TRUE)
+      score_once <- function(cfg, attempt) {
         ro <- .fg_call_llm(
           config = cfg, messages = desire_msgs,
-          .runner = self$.runner,
-          tries = 5, wait_seconds = 2, backoff_factor = 3
+          .runner = self$.runner, .usage = usage$add,
+          tries = 5, wait_seconds = 2, backoff_factor = 3,
+          .call = list(type = "desire", agent_id = self$id, attempt = attempt)
         )
-        u <- extract_token_counts(ro)
-        self$tokens_sent_agent <- self$tokens_sent_agent + .fg_tok0(u$sent)
-        self$tokens_received_agent <- self$tokens_received_agent + .fg_tok0(u$rec)
+        .fg_note_call(ro, cleaned_text = .fg_response_text(ro))
         ro
       }
 
-      response_obj <- score_once(current_config)
+      response_obj <- score_once(current_config, 1L)
       response_text <- .fg_response_text(response_obj)
 
       # A reasoning model can spend the whole token budget on hidden reasoning and
@@ -413,10 +466,10 @@ FGAgent <- R6::R6Class("FGAgent",
       # models, which answer within the default budget on the first call.
       truncated <- identical(.fg_response_finish(response_obj), "length")
       if ((!nzchar(trimws(response_text)) || truncated) &&
-          max_tokens_desire < .fg_desire_retry_tokens) {
+          max_tokens_desire < retry_tokens) {
         retry_cfg <- current_config
-        retry_cfg$model_params$max_tokens <- .fg_desire_retry_tokens
-        response_obj <- score_once(retry_cfg)
+        retry_cfg$model_params$max_tokens <- retry_tokens
+        response_obj <- score_once(retry_cfg, 2L)
         response_text <- .fg_response_text(response_obj)
       }
 
@@ -435,7 +488,116 @@ FGAgent <- R6::R6Class("FGAgent",
       }
 
       sc <- parse_score_0_10(response_text)
+      .fg_note_call(response_obj, score = as.numeric(sc))
       return(as.numeric(sc))
+    },
+
+    #' @description Answer a private question put by the researcher. The
+    #'   agent reads its persona, the standing rules, and the discussion so
+    #'   far, as for a turn, and the question as the closing instruction. The
+    #'   answer is returned, not logged, and is not added to `history`.
+    #' @param question Character. The question.
+    #' @param conversation_log List. The discussion so far, with speakers under
+    #'   the labels this agent is to see.
+    #' @param topic Character or NULL. The session topic, available to the
+    #'   template as `{{topic}}`.
+    #' @param template Character. The instruction template; `{{probe_question}}`
+    #'   is replaced by the question.
+    #' @param max_tokens Integer or NULL. The budget; `NULL` uses the
+    #'   configuration's limit, or 300 when it sets none.
+    #' @param conversation_summary Character or NULL. A summary of earlier
+    #'   discussion to add to the system message.
+    #' @param call_params Optional named list of model parameters written over
+    #'   the configuration for this call.
+    #' @param scale Optional two whole numbers, `c(lo, hi)`. When given, the
+    #'   answer is read as one number on that scale, and an answer from which
+    #'   none can be read is followed by one re-ask (see [fg_probe()]).
+    #' @param reask_template Character or NULL. The re-ask, with placeholders
+    #'   `{{lo}}`, `{{hi}}`, and `{{probe_question}}`; `NULL` uses
+    #'   `participant_probe_reask` of [get_default_prompt_templates()].
+    #' @return A list with `answer` (the final answer, trimmed, or `NA` when
+    #'   the reply is empty after one retry with a larger budget), `raw_text`
+    #'   (the reply as returned), `finish_reason`, `call_id` (the call's
+    #'   row in the session's call record, or `NA` outside a session),
+    #'   `value` (the number read from the answer on `scale`, or `NA`), and
+    #'   `attempts` (the number of calls made). After a re-ask that returned
+    #'   text, `answer`, `raw_text`, `finish_reason`, and `call_id` describe
+    #'   the re-ask.
+    answer_probe = function(question, conversation_log, topic = NULL,
+                            template = "{{probe_question}}", max_tokens = NULL,
+                            conversation_summary = NULL, call_params = NULL,
+                            scale = NULL, reask_template = NULL) {
+      if (is.null(self$config)) {
+        stop("An explicit config is required to answer a probe.", call. = FALSE)
+      }
+      instruction <- replace_placeholders(
+        template, list(probe_question = question, topic = topic %||% ""))
+      transcript <- .fg_log_to_transcript(conversation_log)
+      sys_text <- paste(c(
+        self$persona_description,
+        .fg_handle_sentence(self),
+        self$communication_style_instruction %||% "",
+        if (!is.null(conversation_summary) && nzchar(conversation_summary) &&
+            !identical(conversation_summary, "N/A"))
+          paste0("Summary of earlier discussion: ", conversation_summary),
+        .fg_standing_rules(self$is_moderator)
+      ), collapse = "\n\n")
+      msgs <- .fg_build_agent_messages(transcript, .fg_agent_label(self), sys_text,
+                                       instruction = instruction, self_state = NULL)
+      config <- self$config
+      budget <- max_tokens %||% config$model_params$max_tokens %||% 300L
+      config$model_params$max_tokens <- budget
+      config <- .fg_with_params(config, call_params)
+
+      usage <- .fg_usage_recorder()
+      on.exit(.fg_add_agent_usage(self, usage$value()), add = TRUE)
+      ask <- function(cfg, attempt, messages = msgs) {
+        response <- .fg_call_llm(
+          config = cfg, messages = messages, .runner = self$.runner,
+          .usage = usage$add, tries = 5, wait_seconds = 2, backoff_factor = 3,
+          .call = list(type = "probe", agent_id = self$id, attempt = attempt))
+        .fg_note_call(response, cleaned_text = trimws(.fg_response_text(response)))
+        response
+      }
+      attempts <- 1L
+      response <- ask(config, attempts)
+      answer <- trimws(.fg_response_text(response))
+      if (!nzchar(answer) || identical(.fg_response_finish(response), "length")) {
+        config$model_params$max_tokens <- max(4 * budget, 1024)
+        attempts <- 2L
+        response <- ask(config, attempts)
+        answer <- trimws(.fg_response_text(response))
+      }
+      value <- NA_real_
+      if (!is.null(scale)) {
+        value <- .fg_parse_number(answer, scale[[1]], scale[[2]])
+        if (is.na(value)) {
+          # One re-ask in the same private exchange, with the same budget as
+          # the last call; an empty reply to it is not retried.
+          reask <- replace_placeholders(
+            reask_template %||% get_default_prompt_templates()$participant_probe_reask,
+            list(lo = .fg_number_text(scale[[1]]), hi = .fg_number_text(scale[[2]]),
+                 probe_question = question, topic = topic %||% ""))
+          follow_up <- LLMR::ensure_alternating_messages(c(
+            msgs,
+            if (nzchar(answer)) list(list(role = "assistant", content = answer)),
+            list(list(role = "user", content = reask))))
+          attempts <- attempts + 1L
+          second <- ask(config, attempts, follow_up)
+          again <- trimws(.fg_response_text(second))
+          if (nzchar(again)) {
+            response <- second
+            answer <- again
+            value <- .fg_parse_number(answer, scale[[1]], scale[[2]])
+          }
+        }
+      }
+      handle <- attr(response, "focusgroup_call", exact = TRUE)
+      list(answer = if (nzchar(answer)) answer else NA_character_,
+           raw_text = .fg_raw_text(response),
+           finish_reason = .fg_response_finish(response),
+           call_id = as.integer(if (is.null(handle)) NA_integer_ else handle$index %||% NA_integer_),
+           value = value, attempts = attempts)
     }
   ),
 

@@ -21,10 +21,34 @@
 #'     supplied structurally (a system message plus role-separated turns).
 #'   \item `participant_utterance_subtle_persona` is the flat template. It
 #'     inlines the persona and the whole
-#'     transcript into one user message. A custom template that contains
+#'     transcript into one user message, which for a participant in a
+#'     session opens with the sentence that tells it its handle ("In this
+#'     discussion you are P3."). A custom template that contains
 #'     `\{\{conversation_history\}\}` or `\{\{persona_description\}\}` is treated as a
 #'     flat template and routed through the flat path.
 #' }
+#'
+#' @section Probe templates:
+#' `participant_probe_instruction` closes the messages of a private probe
+#' ([fg_probe()]); `\{\{probe_question\}\}` is replaced by the question.
+#' `participant_probe_reask` follows an answer to a probe with a `scale`
+#' from which no number could be read, in the same private exchange; its
+#' placeholders are `\{\{lo\}\}` and `\{\{hi\}\}`, the ends of the
+#' scale, and `\{\{probe_question\}\}`.
+#'
+#' @section Summary templates:
+#' `summary_participant`, `summary_item`, `summary_disagreements`,
+#' `summary_trajectory`, `summary_turn`, and `summary_session` are the prompts
+#' of [summarize_focus_group()], one per unit, and `summary_reask` is the
+#' message that returns a failing reply with its failures. Their placeholders
+#' are `\{\{topic\}\}`, `\{\{unit\}\}`, `\{\{roster\}\}` (speakers and
+#' message counts, computed in code), `\{\{transcript\}\}`,
+#' `\{\{probes\}\}` (empty unless probe answers are included),
+#' `\{\{stages\}\}` (trajectory only), `\{\{format\}\}` (the JSON shape the
+#' reply must take), and, in `summary_reask`, `\{\{failures\}\}`. They are
+#' read by [summarize_focus_group()] alone; changing them in a session's
+#' `prompt_templates` has no effect, and the `templates` argument of
+#' [summarize_focus_group()] replaces them.
 #'
 #' @return A named list where each element is a character string representing a prompt template.
 #'         Placeholders like `\{\{topic\}\}`, `\{\{persona_description\}\}`, etc., are used within
@@ -73,7 +97,7 @@ Instructions for your response (persona-anchored and safe to disagree):
 3.  Advance the conversation: respond directly to the current question and to others' points. If you agree, add a new angle or example. If you disagree, do so respectfully: acknowledge their point, then state your different view and give a clear reason or brief example.
 4.  Make it concrete. Prefer specific reasons, brief anecdotes, or practical examples over vague generalities. Vary your language and avoid repeating yourself or others verbatim.
 5.  Keep it appropriate for a group turn: 2-6 sentences. Aim for one clear claim and one succinct rationale (optionally a short example). Avoid meta-comments about the discussion mechanics.
-6.  Psychological safety: it is safe to disagree respectfully. Critique ideas, not people; use civil language; you may address participants by ID when relevant.
+6.  Psychological safety: it is safe to disagree respectfully. Critique ideas, not people; use civil language; you may address other participants by their labels when relevant.
 7.  If asked directly whether you are an AI system, say truthfully that this is a simulated research exercise; otherwise simply stay in character.
 
 Based on all the above, what is your contribution to the discussion now?",
@@ -105,6 +129,19 @@ voiced, a respectful disagreement with a clear reason, or a concrete example;
 decrease it if your contribution would merely repeat what was already said.
 Please respond ONLY with a single integer between 0 (no desire) and 10 (very strong).
 Desire to talk score (0-10):",
+
+    # The closing instruction of a private probe (see fg_probe()). The
+    # participant answers from its persona and the discussion so far; the
+    # answer is saved and never enters the discussion.
+    participant_probe_instruction =
+"The researcher has a private question for you. The other participants will not see your answer, and it will not become part of the discussion.
+Question: {{probe_question}}
+Answer as yourself.",
+
+    # The follow-up to a probe answer from which no number on the probe's
+    # scale could be read (see fg_probe()).
+    participant_probe_reask =
+"The researcher could not read one number from {{lo}} to {{hi}} in your answer to the private question. Reply with only the one whole number from {{lo}} to {{hi}} that best gives your answer, and nothing else.",
 
     participant_desire_to_talk_nuanced =
 "You are a focus group participant.
@@ -141,11 +178,11 @@ Your task is to deliver the opening remarks. This should include:
 3.  Clearly state the main topic: '{{topic}}'.
 4.  Explain the purpose of this focus group: '{{focus_group_purpose}}'.
 5.  State the ground rules for the discussion: one person speaks at a time; all opinions are valuable; it is safe to disagree respectfully; critique ideas, not people; avoid interruptions and personal attacks; what's shared here is for this session.
-6.  Invite participants for a brief round of introductions (e.g., 'Let's go around and briefly introduce ourselves. Please share your participant ID and one initial thought or expectation you have about our discussion on {{topic}} today.').
+6.  Invite participants for a brief round of introductions (e.g., 'Let's go around and briefly introduce ourselves. Please share one initial thought or expectation you have about our discussion on {{topic}} today.').
 Keep your remarks professional, clear, and welcoming. Do not ask any substantive questions about the topic yet.",
 
     moderator_icebreaker_question =
-"You are the MODERATOR. The opening remarks and participant introductions are complete.
+"You are the MODERATOR of a focus group.
 The focus group topic is: '{{topic}}'.
 Your persona is: {{persona_description}}.
 The specific icebreaker question to ask is: '{{current_moderator_question}}'.
@@ -156,12 +193,12 @@ Pose the question: '{{current_moderator_question}}'.
 Ensure your delivery is inviting and encourages participation.",
 
     moderator_engagement_question =
-"You are the MODERATOR. The icebreaker has been completed.
+"You are the MODERATOR of a focus group.
 The focus group topic is: '{{topic}}'.
 Your persona is: {{persona_description}}.
 The current engagement question to ask is: '{{current_moderator_question}}'.
 
-Conversation History (most recent messages, if any, after icebreaker):
+Conversation History (most recent messages, if any):
 {{conversation_history}}
 
 Your task is to pose the engagement question: '{{current_moderator_question}}' to the group.
@@ -188,7 +225,7 @@ Ensure your delivery is clear and encourages detailed responses. You might brief
 "You are the MODERATOR.
 The focus group topic is: '{{topic}}'.
 Your persona is: {{persona_description}}.
-Participant {{last_speaker_id}} just said: '{{last_utterance_text}}'.
+The most recent message, from {{last_speaker_id}}, was: '{{last_utterance_text}}'.
 
 Conversation History (most recent messages, including the one above):
 {{conversation_history}}
@@ -198,7 +235,7 @@ Consider these options for your *focused intervention*:
 1.  **Probe {{last_speaker_id}} further:** Ask for clarification ('Could you tell me a bit more about what you mean by...?'), an example ('Can you give an example of that?'), or the reasoning/feelings behind their statement ('What leads you to that conclusion?' or 'How did that make you feel?').
 2.  **Paraphrase {{last_speaker_id}}'s comment:** Briefly restate what you understood them to say to confirm understanding ('So, if I'm hearing you correctly, you're saying... Is that right?').
 3.  **If you notice disagreement or tension emerging:** Normalize respectful disagreement and facilitate dialogue. Example: 'I am hearing different perspectives-let us explore them. What do others think?' or 'There are a few viewpoints here; what common ground or key differences do you notice?' Keep the tone civil and inclusive.
-4.  **Invite a specific other participant to respond to {{last_speaker_id}}'s point:** (e.g., 'Thanks, {{last_speaker_id}}. {{other_participant_id_placeholder}}, what are your thoughts on what {{last_speaker_id}} just shared?'). Only do this if you have a specific reason to call on someone (e.g., they seemed to react, or have relevant expertise).
+4.  **Invite another participant to respond to {{last_speaker_id}}'s point:** name one participant who has not yet responded to it and ask what they think of what {{last_speaker_id}} just shared. Only do this if you have a specific reason to call on someone (e.g., they seemed to react, or have relevant expertise).
 5.  **Open the floor for others to respond to {{last_speaker_id}}'s point:** (e.g., 'That's an interesting perspective, {{last_speaker_id}}. Does anyone else have a similar experience or a different view on that?').
 
 Choose ONE of these actions. Your response should be neutral, encouraging, and focused. Avoid asking multiple questions at once or changing the immediate sub-topic unless it's a natural segue.
@@ -222,14 +259,14 @@ Keep the summary concise (2-3 sentences) and neutral.",
 "You are the MODERATOR.
 The focus group topic is: '{{topic}}'.
 Your persona is: {{persona_description}}.
-You have just completed discussion on a point, or a previous key question.
+You are moving the discussion to the next key question in your guide.
 The next key question in your guide is: '{{current_moderator_question}}'. (This placeholder refers to the *new* question you are about to introduce).
 
 Conversation History (most recent messages):
 {{conversation_history}}
 
 Your task is to smoothly transition the discussion to the next key question: '{{current_moderator_question}}'.
-You might briefly link it to the previous discussion if appropriate ('Thanks everyone, that was a very insightful discussion on [previous point/question]. Now, I'd like to move on to...'), or simply introduce it as the next area to explore.
+If the transcript shows an earlier discussion, you might briefly link the new question to it; otherwise simply introduce it as the next area to explore.
 Make the transition clear and guide the group to the new question.
 State the new question clearly.",
 
@@ -247,7 +284,7 @@ Review the recent conversation flow.
 Your intervention should be polite, neutral, and aim to balance participation. Choose one specific action if needed, or state 'No intervention needed at this time if participation seems balanced.'",
 
     moderator_ending_question =
-"You are the MODERATOR. You are nearing the end of the planned questions.
+"You are the MODERATOR. The guide marks this as its ending question.
 The focus group topic is: '{{topic}}'.
 Your persona is: {{persona_description}}.
 The specific ending question to ask is: '{{current_moderator_question}}'.
@@ -263,14 +300,14 @@ Examples of phrasing if the placeholder is generic:
 Pose your ending question.",
 
     moderator_closing =
-"You are the MODERATOR. The discussion, including the ending question, is complete.
+"You are the MODERATOR. This is the closing turn of the session.
 The focus group topic is: '{{topic}}'.
 Your persona is: {{persona_description}}.
 
 Your task is to deliver the closing remarks. This should include:
 1.  Thanking all participants for their time, valuable contributions, and thoughtful discussion.
 2.  Briefly reiterating that their input is important (perhaps linking back to the '{{focus_group_purpose}}').
-3.  Reminding them about confidentiality/anonymity of their contributions in any reporting (as discussed in opening).
+3.  Stating that their contributions will be reported without identifying them.
 4.  Explaining any next steps (e.g., 'We will be analyzing this discussion to understand perspectives on {{topic}}.') or information about incentives if applicable and not yet covered.
 Keep it professional, appreciative, and concise.",
 
@@ -279,7 +316,7 @@ Keep it professional, appreciative, and concise.",
 Your defining characteristics are: {{persona_description}}.
 The main topic is: '{{topic}}'.
 The current question being discussed is: '{{current_moderator_question}}'.
-Conversation History (most recent messages first):
+Conversation History (oldest message first):
 {{conversation_history}}
 
 Based on your role as moderator and the ongoing discussion, what is your next statement or question?
@@ -320,6 +357,150 @@ Theme 2: [Name of Theme 2]
   Quote: ...
 etc.
 
-Focus on capturing the essence of the participants' perspectives and experiences as represented in the text. Be objective in your interpretation."
+Focus on capturing the essence of the participants' perspectives and experiences as represented in the text. Be objective in your interpretation.",
+
+    # --- Summary Prompts (summarize_focus_group()) ---
+    # Each unit template must keep {{transcript}} and {{format}}; the package
+    # fills {{format}} with the JSON shape it checks. summary_reask must keep
+    # {{failures}}.
+    summary_participant =
+"You are helping a researcher summarize a focus group discussion. Summarize the contributions of one participant, {{unit}}.
+
+Topic: {{topic}}
+{{roster}}
+
+Each message in the transcript begins with its id in brackets, such as [#12], and the label of its speaker. Lines such as \"-- Item 3 --\" mark the items of the moderator's guide. A message marked \"injected\" was placed into the discussion by the researcher; one marked \"shown to participants only\" was not seen by the moderator.
+
+Transcript:
+{{transcript}}
+{{probes}}
+Report {{unit}}'s positions and the reasons given for them; any change of position, citing the earlier message and the later one; how {{unit}} responded to other participants, named by label; and the guide items {{unit}} did not address. Report where {{unit}} disagreed with others, or held a position alone, as fully as where {{unit}} agreed.
+
+Rules:
+- Base every claim on the transcript. When it does not show something, such as a reason or a view on an item, give the claim the status \"not_stated\" rather than inferring it from silence or absence.
+- Report dissent, silence, and unanswered questions as fully as agreement.
+- Write \"everyone\", \"all\", \"consensus\", or \"unanimous\" only when the claim cites a message from every participant who spoke on that item.
+- Quote only words that appear in the cited message, copied exactly. Never invent, repair, or merge quotes.
+- Refer to speakers only by their labels.
+
+{{format}}",
+
+    summary_item =
+"You are helping a researcher summarize a focus group discussion one guide item at a time. Summarize guide item {{unit}}.
+
+Topic: {{topic}}
+{{roster}}
+
+Each message in the transcript begins with its id in brackets, such as [#12], and the label of its speaker. Lines such as \"-- Item 3 --\" mark the items of the moderator's guide. A message marked \"injected\" was placed into the discussion by the researcher; one marked \"shown to participants only\" was not seen by the moderator.
+
+Transcript of this item:
+{{transcript}}
+{{probes}}
+Report the question the moderator asked, each position taken and who held it, where participants agreed and where they disagreed, positions held by one participant alone, and questions that went unanswered. A participant listed as not speaking on this item gave no view on it: report that as silence, not as agreement.
+
+Rules:
+- Base every claim on the transcript. When it does not show something, such as a reason or a view on an item, give the claim the status \"not_stated\" rather than inferring it from silence or absence.
+- Report dissent, silence, and unanswered questions as fully as agreement.
+- Write \"everyone\", \"all\", \"consensus\", or \"unanimous\" only when the claim cites a message from every participant who spoke on that item.
+- Quote only words that appear in the cited message, copied exactly. Never invent, repair, or merge quotes.
+- Refer to speakers only by their labels.
+
+{{format}}",
+
+    summary_disagreements =
+"You are helping a researcher find where a focus group discussion divided. Read {{unit}}.
+
+Topic: {{topic}}
+{{roster}}
+
+Each message in the transcript begins with its id in brackets, such as [#12], and the label of its speaker. Lines such as \"-- Item 3 --\" mark the items of the moderator's guide. A message marked \"injected\" was placed into the discussion by the researcher; one marked \"shown to participants only\" was not seen by the moderator.
+
+Transcript:
+{{transcript}}
+{{probes}}
+List every disagreement among the participants and every position held by one participant alone. For each, give the holders, the messages in which they stated their positions, and how it ended: with a concession (the message in which a holder gave ground), with the moderator moving on (the moderator's message), or unresolved. A participant who said nothing did not agree. If there is no disagreement and no position held alone, return an empty list of claims.
+
+Rules:
+- Base every claim on the transcript. When it does not show something, such as a reason or a view on an item, give the claim the status \"not_stated\" rather than inferring it from silence or absence.
+- Report dissent, silence, and unanswered questions as fully as agreement.
+- Write \"everyone\", \"all\", \"consensus\", or \"unanimous\" only when the claim cites a message from every participant who spoke on that item.
+- Quote only words that appear in the cited message, copied exactly. Never invent, repair, or merge quotes.
+- Refer to speakers only by their labels.
+
+{{format}}",
+
+    summary_trajectory =
+"You are helping a researcher see how a focus group discussion developed over time. Trace {{unit}} stage by stage.
+
+Topic: {{topic}}
+{{roster}}
+The stages are fixed in advance:
+{{stages}}
+
+Each message in the transcript begins with its id in brackets, such as [#12], and the label of its speaker. Lines such as \"-- Item 3 --\" mark the items of the moderator's guide. A message marked \"injected\" was placed into the discussion by the researcher; one marked \"shown to participants only\" was not seen by the moderator.
+
+Transcript:
+{{transcript}}
+{{probes}}
+For each stage, report what was discussed, the positions taken and who held them, and what changed from the stage before: positions that shifted, disagreements that opened or closed, participants who joined in or fell silent, and questions that went unanswered.
+
+Rules:
+- Base every claim on the transcript. When it does not show something, such as a reason or a view on an item, give the claim the status \"not_stated\" rather than inferring it from silence or absence.
+- Report dissent, silence, and unanswered questions as fully as agreement.
+- Write \"everyone\", \"all\", \"consensus\", or \"unanimous\" only when the claim cites a message from every participant who spoke on that item.
+- Quote only words that appear in the cited message, copied exactly. Never invent, repair, or merge quotes.
+- Refer to speakers only by their labels.
+
+{{format}}",
+
+    summary_turn =
+"You are helping a researcher summarize a focus group discussion turn by turn. Give the gist of each message in {{unit}}.
+
+Topic: {{topic}}
+{{roster}}
+
+Each message in the transcript begins with its id in brackets, such as [#12], and the label of its speaker. Lines such as \"-- Item 3 --\" mark the items of the moderator's guide. A message marked \"injected\" was placed into the discussion by the researcher; one marked \"shown to participants only\" was not seen by the moderator.
+
+Transcript:
+{{transcript}}
+{{probes}}
+For each message, state what its speaker said in it: the position taken, the reason or example given, the question asked, or the step the moderator took. Keep disagreement, hedging, and unanswered questions visible; do not turn a hedge into agreement or add what the speaker did not say.
+
+Rules:
+- Base every claim on the transcript. When it does not show something, such as a reason or a view on an item, give the claim the status \"not_stated\" rather than inferring it from silence or absence.
+- Report dissent, silence, and unanswered questions as fully as agreement.
+- Write \"everyone\", \"all\", \"consensus\", or \"unanimous\" only when the claim cites a message from every participant who spoke on that item.
+- Quote only words that appear in the cited message, copied exactly. Never invent, repair, or merge quotes.
+- Refer to speakers only by their labels.
+
+{{format}}",
+
+    summary_session =
+"You are helping a researcher summarize a whole focus group discussion. Summarize {{unit}}.
+
+Topic: {{topic}}
+{{roster}}
+
+Each message in the transcript begins with its id in brackets, such as [#12], and the label of its speaker. Lines such as \"-- Item 3 --\" mark the items of the moderator's guide. A message marked \"injected\" was placed into the discussion by the researcher; one marked \"shown to participants only\" was not seen by the moderator.
+
+Transcript:
+{{transcript}}
+{{probes}}
+Report the main positions and who held them, where the group agreed and where it divided, positions held by one participant alone, changes of position, participants who said little or nothing, and questions the moderator asked that went unanswered.
+
+Rules:
+- Base every claim on the transcript. When it does not show something, such as a reason or a view on an item, give the claim the status \"not_stated\" rather than inferring it from silence or absence.
+- Report dissent, silence, and unanswered questions as fully as agreement.
+- Write \"everyone\", \"all\", \"consensus\", or \"unanimous\" only when the claim cites a message from every participant who spoke on that item.
+- Quote only words that appear in the cited message, copied exactly. Never invent, repair, or merge quotes.
+- Refer to speakers only by their labels.
+
+{{format}}",
+
+    summary_reask =
+"Your reply did not pass these checks:
+{{failures}}
+
+Reply again with the complete JSON object in the same format, with every point above corrected. Cite only messages shown in the transcript, copy each quote exactly from the message it cites, and give the status \"not_stated\" to anything the transcript does not show."
   )
 }

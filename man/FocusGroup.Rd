@@ -4,9 +4,9 @@
 \alias{FocusGroup}
 \title{FocusGroup R6 Class}
 \value{
-An R6 generator. `FocusGroup$new()` returns a session object;
-  most analyses run through [run_focus_group()], which builds, runs, and
-  returns one. Construction alone makes no model call.
+An R6 generator. \code{FocusGroup$new()} returns a session object;
+most analyses run through \code{\link[=run_focus_group]{run_focus_group()}}, which builds, runs, and
+returns one. Construction alone makes no model call.
 }
 \description{
 Main R6 class for managing and running a focus group simulation.
@@ -14,6 +14,42 @@ It orchestrates the simulation through distinct phases (Opening, Icebreaker,
 Engagement, Exploration, Closing) guided by a question script, manages agent
 interactions via a turn-taking flow, and provides methods for analysis and
 visualization of the conversation.
+}
+\details{
+The group's token fields count every model call made on its behalf: the
+moderator's and participants' turns with their retries, desire scores,
+interim and final summaries, and model analyses run later, such as
+\code{analyze_themes()}. \code{\link[=run_focus_group]{run_focus_group()}} describes how unreported usage is
+handled. A transcript imported with \code{\link[=focus_group_from_transcript]{focus_group_from_transcript()}} adds
+no calls. Objects saved by FocusGroup 0.5.2 and earlier lack
+\code{total_tokens} and \code{calls_usage_unknown}.
+
+A session run by \code{\link[=run_focus_group]{run_focus_group()}} carries a \code{session_status} attribute,
+a list with \code{complete} and \code{failure} as in that function's \code{metadata}.
+
+Every prompt shows the agents under their handles, never under their IDs:
+the participants' turns, the moderator's lines, desire scores, probes, and
+the interim summary that stands in for messages the prompt window no
+longer holds. The researcher's records, the log and the routing record
+among them, keep the IDs. Each participant's system message names its
+handle ("In this discussion you are P3.").
+
+The moderator calls on silent participants at the guide items given by
+\code{call_on_silent}. When the discussion of such an item ends, each
+participant who has not spoken since the previous call-on point (or the
+start of the session) is asked, in roster order, by the line in
+\code{call_on_text}, delivered as written with no model call; the participant
+then answers, without a desire score, and the routing record gives the
+turn the rule \code{"called_on"}. With the default guide of
+\code{\link[=run_focus_group]{run_focus_group()}} the points are items 2, 4, and 7. Krueger (2002)
+describes the opening question of a focus group as a round robin; the
+first point gives every participant a turn early in the session.
+
+A moderator line whose last question opens or closes with one
+participant's handle ("P3, do you agree?", "P3: what do you think?",
+"Could you say more, P3?"), or is a short follow-up naming one ("And
+P3?", "What about P3?", "How about P3?"), and does not also ask the
+group, gives that participant the next turn, with the rule \code{"addressed"}.
 }
 \examples{
 cfg <- LLMR::llm_config("groq", "openai/gpt-oss-20b",
@@ -30,6 +66,10 @@ fg <- FocusGroup$new(topic = "Neighborhood safety",
                      turn_taking_flow = flow)
 fg$topic
 }
+\references{
+Krueger, R. A. (2002). \emph{Designing and Conducting Focus Group
+Interviews}. University of Minnesota.
+}
 \section{Public fields}{
 \if{html}{\out{<div class="r6-fields">}}
 \describe{
@@ -37,23 +77,38 @@ fg$topic
 
 \item{\code{purpose}}{Character. The primary purpose or research objective of conducting the focus group.}
 
-\item{\code{agents}}{Named list. A list of `FGAgent` objects participating in the simulation, indexed by their IDs.}
+\item{\code{agents}}{Named list. A list of \code{FGAgent} objects participating in the simulation, indexed by their IDs.}
 
 \item{\code{moderator_id}}{Character. The ID of the agent designated as the moderator.}
 
 \item{\code{conversation_log}}{List. A chronological log of all messages. Each message is a list
-that includes at least `message_id`, `round`, `speaker_id`, `is_moderator`,
-`text`, `timestamp`, `phase`, and `metadata`, along with call metadata:
-`response_id`, `finish_reason`, `sent_tokens`, `rec_tokens`, `total_tokens`,
-`duration_s`, `provider`, and `model`. `message_id` is unique message order;
-moderator and participant messages from one moderator cycle share `round`.}
+that includes at least \code{message_id}, \code{round}, \code{item}, \code{speaker_id},
+\code{handle}, \code{is_moderator}, \code{text}, \code{timestamp}, \code{phase}, and \code{metadata},
+along with call metadata: \code{response_id}, \code{finish_reason}, \code{sent_tokens},
+\code{rec_tokens}, \code{total_tokens}, \code{duration_s}, \code{provider}, and \code{model}.
+\code{message_id} is unique message order; moderator and participant messages
+from one moderator cycle share \code{round}, and \code{item} is the guide item the
+message belongs to (0 for the roster row). \code{speaker_id} is the agent ID
+and \code{handle} the label the agents saw.}
 
-\item{\code{turn_taking_flow}}{A `ConversationFlow` object dictating participant turn-taking.}
+\item{\code{handles}}{Named character vector. The label under which each agent
+appears to the other agents, named by agent ID; see the \code{handles}
+argument of \code{new()}.}
+
+\item{\code{call_on_silent}}{List. The guide items at which the moderator calls on
+the participants who have not spoken, as \code{points} (the name of each
+point: \code{"opening"}, \code{"midpoint"}, \code{"end"}, or \code{"item:<k>"}) and \code{items}
+(the item numbers). Both are empty when call-ons are off.}
+
+\item{\code{call_on_text}}{Character. The moderator's call-on line;
+\code{{participant}} is replaced by the participant's handle.}
+
+\item{\code{turn_taking_flow}}{A \code{ConversationFlow} object dictating participant turn-taking.}
 
 \item{\code{prompt_templates}}{List. Holds prompt templates for agent/moderator actions.}
 
 \item{\code{question_script}}{List. A structured list defining phases and specific questions/actions for the moderator.
-Each element is a list with `phase` (e.g., "opening", "icebreaker_question") and optionally `text` (for specific questions).}
+Each element is a list with \code{phase} (e.g., "opening", "icebreaker_question") and optionally \code{text} (for specific questions).}
 
 \item{\code{current_question_text}}{Character. Text of the current question being discussed.}
 
@@ -63,10 +118,10 @@ used for managing context length in prompts.}
 \item{\code{final_summary}}{Character. Final LLM-generated summary from the most recent simulation run.}
 
 \item{\code{message_mode}}{Character. The message construction used by the most recent
-`run_simulation()` ("roleflip" or "flat"), recorded so a saved object can be
+\code{run_simulation()} ("roleflip" or "flat"), recorded so a saved object can be
 replayed (e.g. in the GUI continuation experiment) with the same construction.}
 
-\item{\code{admin_config}}{An `llm_config` object for group-level model tasks.}
+\item{\code{admin_config}}{An \code{llm_config} object for group-level model tasks.}
 
 \item{\code{max_tokens_utterance}}{Integer. Default max tokens for participant utterances.}
 
@@ -74,11 +129,44 @@ replayed (e.g. in the GUI continuation experiment) with the same construction.}
 
 \item{\code{max_tokens_desire}}{Integer. Default max tokens for desire-to-talk queries.}
 
-\item{\code{max_participant_responses}}{Integer. Maximum number of participant exchanges per round before the moderator can intervene. Can also be set globally via `options(focusgroup.max_participant_responses = N)`.}
+\item{\code{max_tokens_desire_retry}}{Integer. Max tokens for the one retry of a
+desire query whose reply was empty or cut off.}
 
-\item{\code{total_tokens_sent}}{Numeric. Total tokens sent across all LLM calls in the group.}
+\item{\code{max_tokens_summary}}{Integer. Max tokens for the final summary.}
 
-\item{\code{total_tokens_received}}{Numeric. Total tokens received across all LLM calls.}
+\item{\code{max_tokens_interim_summary}}{Integer. Max tokens for an interim summary.}
+
+\item{\code{max_tokens_probe}}{Integer or \code{NULL}. Max tokens for a probe answer;
+\code{NULL} uses the agent configuration's limit, or 300 when it sets none.}
+
+\item{\code{reasoning_effort}}{\code{NULL}, one reasoning-effort setting for every call
+type, or a named list of settings by call type (\code{"moderator"},
+\code{"participant"}, \code{"desire"}, \code{"summary"}, \code{"probe"}). A setting is written
+over the configuration's \code{reasoning_effort} for those calls; \code{NULL} leaves
+the configurations as they are.}
+
+\item{\code{max_participant_responses}}{Integer. Maximum number of participant exchanges per round before the moderator can intervene. Can also be set globally via \code{options(focusgroup.max_participant_responses = N)}.}
+
+\item{\code{total_tokens_sent}}{Numeric. Tokens sent across all LLM calls in the
+group, as reported; calls that reported no count add nothing.}
+
+\item{\code{total_tokens_received}}{Numeric. Tokens received across all LLM calls,
+as reported.}
+
+\item{\code{total_tokens}}{Numeric. Total tokens across all LLM calls: each call's
+reported total, or its sent and received counts when it reported no total.}
+
+\item{\code{calls_usage_unknown}}{Numeric. Number of calls whose usage was
+incomplete, so that the three token fields are lower bounds when it is
+positive; \code{NA} when that number cannot be determined, as after a call that
+raised an error.}
+
+\item{\code{records}}{List. The record of the most recent session: \code{calls}, one
+entry per model call the session made; \code{routing}, one entry per speaker
+selection; \code{probes} and \code{injections}, described in \code{\link[=run_focus_group]{run_focus_group()}};
+and \code{info}, the versions, standing rules, and settings in force when the
+session started. \code{\link[=run_focus_group]{run_focus_group()}} returns the first four as data
+frames. Objects saved by FocusGroup 0.5.3 and earlier lack it.}
 }
 \if{html}{\out{</div>}}
 }
@@ -87,6 +175,7 @@ replayed (e.g. in the GUI continuation experiment) with the same construction.}
 \itemize{
 \item \href{#method-FocusGroup-new}{\code{FocusGroup$new()}}
 \item \href{#method-FocusGroup-run_simulation}{\code{FocusGroup$run_simulation()}}
+\item \href{#method-FocusGroup-run_arms}{\code{FocusGroup$run_arms()}}
 \item \href{#method-FocusGroup-summarize}{\code{FocusGroup$summarize()}}
 \item \href{#method-FocusGroup-analyze}{\code{FocusGroup$analyze()}}
 \item \href{#method-FocusGroup-analyze_topics}{\code{FocusGroup$analyze_topics()}}
@@ -121,7 +210,11 @@ Initialize a new FocusGroup simulation.
   prompt_templates = list(),
   admin_config = NULL,
   max_tokens_config = list(),
-  max_participant_responses = NULL
+  max_participant_responses = NULL,
+  reasoning_effort = NULL,
+  handles = NULL,
+  call_on_silent = c("opening", "midpoint", "end"),
+  call_on_text = NULL
 )}\if{html}{\out{</div>}}
 }
 
@@ -132,25 +225,67 @@ Initialize a new FocusGroup simulation.
 
 \item{\code{purpose}}{Character. The primary purpose of the focus group.}
 
-\item{\code{agents}}{Named list of initialized `FGAgent` objects.}
+\item{\code{agents}}{Named list of initialized \code{FGAgent} objects, each named
+by its \code{id}.}
 
 \item{\code{moderator_id}}{Character. The ID of the agent acting as moderator.}
 
-\item{\code{turn_taking_flow}}{An initialized `ConversationFlow` object.}
+\item{\code{turn_taking_flow}}{An initialized \code{ConversationFlow} object.}
 
 \item{\code{question_script}}{List. Moderator's script defining phases and questions.
-If empty, a minimal default script (opening, generic discussion, closing) is used.}
+If empty, a minimal default script (opening, generic discussion, closing) is used.
+An item with \code{verbatim = TRUE} is delivered as its \code{text} reads,
+with no model call; it must have a text.}
 
 \item{\code{prompt_templates}}{List. Custom prompt templates. Defaults are used if not provided.}
 
-\item{\code{admin_config}}{An `llm_config` object for administrative model tasks.
-If `NULL`, the moderator's explicitly supplied `config` is used.}
+\item{\code{admin_config}}{An \code{llm_config} object for administrative model tasks.
+If \code{NULL}, the moderator's explicitly supplied \code{config} is used.}
 
-\item{\code{max_tokens_config}}{List. Optional. Named list with `utterance`, `moderator`, `desire`
-to override default max token limits for these LLM call types.}
+\item{\code{max_tokens_config}}{List. Optional. Named list with \code{utterance},
+\code{moderator}, \code{desire}, \code{desire_retry}, \code{summary}, \code{interim_summary},
+and \code{probe} to override the default max token limits (160, 400, 16,
+256, 400, 250, and the configuration's own limit or 300) for these
+call types. A model that reasons
+before answering needs \code{desire} and \code{desire_retry} large enough to hold
+its reasoning and the score.}
 
 \item{\code{max_participant_responses}}{Integer. Optional. Maximum participant exchanges per round before moderator intervention.
-Defaults to `getOption("focusgroup.max_participant_responses", 3)`.}
+Defaults to \code{getOption("focusgroup.max_participant_responses", 2L)}.
+It must be one positive whole number.}
+
+\item{\code{reasoning_effort}}{Optional reasoning-effort setting, as described
+for the \code{reasoning_effort} field.}
+
+\item{\code{handles}}{The labels under which the agents see each other.
+\code{NULL} (the default) shows the participants as \code{"P1"}, \code{"P2"}, ...
+in roster order and the moderator as \code{"Moderator"}, so the IDs given
+to the agents never reach a prompt; a participant whose ID is already
+\code{"P1"} to \code{"P99"} keeps it, and the others take the numbers that are
+no agent's ID, the moderator's included, so that a neutral handle
+never names a different agent's ID. \code{"ids"} shows the agent IDs, with
+a message listing them. A character vector named by agent ID sets
+handles of your own, such as invented first names, and the agents it
+does not name keep their neutral handles. A handle must be non-empty
+and distinct, cannot be \code{"System"} or the name of an injected voice,
+and cannot contain a standalone number from 0 to 10, which a desire
+score could be mistaken for. No participant's ID may be the
+moderator's handle (in any case), which would make the two
+indistinguishable.}
+
+\item{\code{call_on_silent}}{Where the moderator calls on the participants
+who have not spoken since the previous such point: any of
+\code{"opening"} (the first discussion item), \code{"midpoint"} (discussion
+item \code{ceiling(D / 2)} of \code{D}), and \code{"end"} (the last discussion
+item), or guide item numbers, which count every item, as
+\code{\link[=fg_after_item]{fg_after_item()}} does, and must be items participants answer.
+\code{TRUE} gives the three named points; \code{"none"}, \code{FALSE}, or \code{NULL}
+turns call-ons off. Points falling on the same item count once.}
+
+\item{\code{call_on_text}}{The call-on line, delivered as written with no
+model call. It must contain \code{{participant}}, which is replaced by the
+participant's handle. \code{NULL} uses "\{participant\}, I'd like to hear
+from you as well. What are your thoughts?".}
 }
 \if{html}{\out{</div>}}
 }
@@ -160,25 +295,93 @@ Defaults to `getOption("focusgroup.max_participant_responses", 3)`.}
 \if{latex}{\out{\hypertarget{method-FocusGroup-run_simulation}{}}}
 \subsection{Method \code{run_simulation()}}{
 Run the full focus group simulation.
-Iterates through the `question_script` phases or a specified number of rounds.
+Iterates through the \code{question_script} phases or a specified number of rounds.
 \subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{FocusGroup$run_simulation(num_rounds = NULL, verbose = FALSE)}\if{html}{\out{</div>}}
+\if{html}{\out{<div class="r">}}\preformatted{FocusGroup$run_simulation(
+  num_rounds = NULL,
+  verbose = FALSE,
+  injections = NULL,
+  probes = NULL,
+  final_summary = TRUE
+)}\if{html}{\out{</div>}}
 }
 
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{num_rounds}}{Integer. Optional. Maximum number of moderator cycles to run. If `NULL` (default),
-the simulation runs until the `question_script` is exhausted or the moderator
-decides to end. If both `num_rounds` and `question_script` are provided,
+\item{\code{num_rounds}}{Integer. Optional. Maximum number of moderator cycles to run. If \code{NULL} (default),
+the simulation runs until the \code{question_script} is exhausted or the moderator
+decides to end. If both \code{num_rounds} and \code{question_script} are provided,
 the simulation stops at whichever condition is met first.}
 
-\item{\code{verbose}}{Logical. If `TRUE`, prints progress and utterances to the console.}
+\item{\code{verbose}}{Logical. If \code{TRUE}, prints progress and utterances to the console.}
+
+\item{\code{injections}}{Optional \code{\link[=fg_injection]{fg_injection()}} or list of injections to
+place into the session at their points.}
+
+\item{\code{probes}}{Optional \code{\link[=fg_probe]{fg_probe()}} or list of probes to ask at their
+points; the answers go to \code{records$probes}, never to the log.}
+
+\item{\code{final_summary}}{Logical. \code{TRUE} (the default) ends the session
+with a model-written summary in \code{final_summary}; \code{FALSE} makes no
+summary call and leaves \code{final_summary} \code{NULL}.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-Invisibly returns the `conversation_log`.
+Invisibly returns the \code{conversation_log}. When a call fails,
+the error propagates and the messages completed so far remain in
+\code{conversation_log}. A failed final summary is not an error: it warns
+and leaves \code{final_summary} as \code{NA}. Every model call the session
+makes, and every speaker selection, is recorded in \code{records}. An
+injection or probe whose point the session never reaches is reported
+with a warning.
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-FocusGroup-run_arms"></a>}}
+\if{latex}{\out{\hypertarget{method-FocusGroup-run_arms}{}}}
+\subsection{Method \code{run_arms()}}{
+Run the session up to a branch point once, then continue
+a copy of it once per arm. \code{\link[=run_focus_group_arms]{run_focus_group_arms()}} describes the
+design and builds results from the objects returned here.
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{FocusGroup$run_arms(
+  arms,
+  probes = NULL,
+  num_rounds = NULL,
+  verbose = FALSE,
+  final_summary = TRUE
+)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{arms}}{A named list of arms, each \code{NULL}, an \code{\link[=fg_injection]{fg_injection()}}, or
+a list of injections; the first injection of every arm that has one
+must name the same point.}
+
+\item{\code{probes}}{Optional \code{\link[=fg_probe]{fg_probe()}} or list of probes.}
+
+\item{\code{num_rounds}}{Integer. Optional maximum number of moderator cycles.}
+
+\item{\code{verbose}}{Logical. Print progress.}
+
+\item{\code{final_summary}}{Logical. Whether each arm ends with a final
+summary, as in \code{run_simulation()}.}
+}
+\if{html}{\out{</div>}}
+}
+\subsection{Returns}{
+A list with \code{prefix}, this object, stopped at the branch point,
+and \code{arms}, a named list of \code{FocusGroup} objects, each a copy of the
+prefix continued to the end of the session under one arm. A failure
+in an arm raises an error of class \code{focusgroup_branch_failure} whose
+fields \code{arm}, \code{branch} (the failed arm's object), \code{completed},
+\code{phase}, and \code{parent} describe it. A session that ends before the
+branch point raises an error of class
+\code{focusgroup_injection_unreached}.
 }
 }
 \if{html}{\out{<hr>}}
@@ -200,24 +403,35 @@ Generate a summary of the conversation using an LLM.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{config}}{An explicit `llm_config` object for the summarization model.}
+\item{\code{config}}{An explicit \code{llm_config} object for the summarization model.}
 
 \item{\code{summary_level}}{Integer (1-3). 1: Prose overview, 2: Detailed bulleted, 3: Short bulleted takeaways.}
 
 \item{\code{max_tokens}}{Integer. Optional. Max tokens for the summary.}
 
-\item{\code{internal_call}}{Logical. If TRUE, this is an internal call (e.g. for context window management) and token counts are not added to the agent who owns `admin_config`.}
+\item{\code{internal_call}}{Logical. Marks a summary made for context
+management during the session. It does not change the call: the
+call's usage is added to the group's token fields either way, and to
+no agent's. A session's call record lists such a summary as
+\code{"interim_summary"}.}
 
-\item{\code{transcript_override}}{Character. Optional. If provided, this transcript is summarized instead of `self$conversation_log`.}
+\item{\code{transcript_override}}{Character. Optional. If provided, this transcript is summarized instead of \code{self$conversation_log}.}
 
 \item{\code{.runner}}{Optional function used instead of live model calls. It
-receives a data frame with `config` and `messages` list-columns and
-returns the rows with at least `response_text`.}
+receives a data frame with \code{config} and \code{messages} list-columns and
+returns the rows with at least \code{response_text}. \code{NULL} makes a live
+call through \code{config}, also on a session that ran with a runner.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-Character string containing the generated summary.
+Character string containing the generated summary. The
+transcript made from the log shows each speaker under its handle,
+with the agent ID beside it when the two differ, and leaves out the
+roster row; such a summary is for the researcher. The interim summary
+the agents read is made from a \code{transcript_override} that shows
+handles only. A log or transcript with nothing to summarize is an
+error, as is an empty reply; its usage is recorded first.
 }
 }
 \if{html}{\out{<hr>}}
@@ -232,16 +446,16 @@ Basic analysis of the conversation log.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.
-If `NULL`, all messages are analyzed.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.
+If \code{NULL}, all messages are analyzed.}
 
-\item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze. If `NULL`, analyzes all speakers.}
+\item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze. If \code{NULL}, analyzes all speakers.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-A list with `speaker_stats` (a tibble: speaker_id, utterance_count, total_words, avg_words_per_utterance)
-        and `full_transcript` (character string).
+A list with \code{speaker_stats} (a tibble: speaker_id, utterance_count, total_words, avg_words_per_utterance)
+and \code{full_transcript} (character string).
 }
 }
 \if{html}{\out{<hr>}}
@@ -272,25 +486,25 @@ document.}
 
 \item{\code{top_n_terms}}{Integer. Number of top terms per topic to return.}
 
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 
 \item{\code{seed}}{Integer or NULL. Seed for the LDA control (default 110);
-`NULL` leaves it unset.}
+\code{NULL} leaves it unset.}
 
-\item{\code{unit}}{Character. What counts as a document: `"message"`
-(default) treats each utterance as a document; `"speaker"` pools
+\item{\code{unit}}{Character. What counts as a document: \code{"message"}
+(default) treats each utterance as a document; \code{"speaker"} pools
 every turn by the same speaker,
 which leaves as many documents as there are speakers and tends to
 recover who spoke rather than what was discussed.}
 
-\item{\code{...}}{Additional arguments to `topicmodels::LDA()`.}
+\item{\code{...}}{Additional arguments to \code{topicmodels::LDA()}.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-A list with LDA model, topic terms, and document-topic proportions. `NULL` on failure.
+A list with LDA model, topic terms, and document-topic proportions. \code{NULL} on failure.
 }
 }
 \if{html}{\out{<hr>}}
@@ -312,11 +526,11 @@ Calculate TF-IDF scores for terms per participant.
 \describe{
 \item{\code{top_n_terms}}{Integer. Number of top TF-IDF terms per participant.}
 
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 
-\item{\code{...}}{Additional arguments to `tidytext::unnest_tokens`.}
+\item{\code{...}}{Additional arguments to \code{tidytext::unnest_tokens}.}
 }
 \if{html}{\out{</div>}}
 }
@@ -340,9 +554,9 @@ Calculate readability scores for each participant's aggregated text.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{measures}}{Character vector. Readability measure(s) from `quanteda.textstats::textstat_readability`.}
+\item{\code{measures}}{Character vector. Readability measure(s) from \code{quanteda.textstats::textstat_readability}.}
 
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 }
@@ -369,21 +583,22 @@ Perform LLM-assisted thematic analysis on the transcript.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{config}}{An explicit `llm_config` object for thematic analysis.}
+\item{\code{config}}{An explicit \code{llm_config} object for thematic analysis.}
 
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 
 \item{\code{.runner}}{Optional function used instead of live model calls. It
-receives a data frame with `config` and `messages` list-columns and
-returns the rows with at least `response_text`.}
+receives a data frame with \code{config} and \code{messages} list-columns and
+returns the rows with at least \code{response_text}. \code{NULL} makes a live
+call through \code{config}, also on a session that ran with a runner.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
 The thematic summary as a character string. An empty transcript
-  returns `character(0)`. Provider failures are propagated.
+returns \code{character(0)}. Provider failures are propagated.
 }
 }
 \if{html}{\out{<hr>}}
@@ -398,7 +613,7 @@ Perform statistical analysis on conversation patterns.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 }
@@ -423,14 +638,18 @@ Analyze participation balance and dominance patterns.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 }
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-A list with participation statistics and balance metrics.
+A list with participation statistics and balance metrics. Every
+agent in the roster has a row, an agent who did not speak in the
+analyzed messages with zero messages and words and an \code{NA} average.
+The \code{called_on} column counts the turns that answered the
+moderator's call-on line.
 }
 }
 \if{html}{\out{<hr>}}
@@ -445,7 +664,7 @@ Analyze response patterns and interaction behaviors.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 }
@@ -467,7 +686,7 @@ Analyze question asking patterns during the conversation.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 }
@@ -495,7 +714,7 @@ Extract and analyze key phrases using n-grams.
 \describe{
 \item{\code{min_freq}}{Integer. Minimum frequency for phrases to be considered key.}
 
-\item{\code{message_ids}}{Integer vector. Optional `message_id` values to analyze.}
+\item{\code{message_ids}}{Integer vector. Optional \code{message_id} values to analyze.}
 
 \item{\code{speaker_ids}}{Character vector. Optional. Specific speakers to analyze.}
 }

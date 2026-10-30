@@ -16,67 +16,343 @@ run_focus_group(
   message_mode = c("roleflip", "flat"),
   verbose = TRUE,
   max_participant_responses = NULL,
-  max_calls = 100L,
+  max_calls = 120L,
   confirm = FALSE,
+  max_tokens_config = NULL,
+  reasoning_effort = NULL,
+  on_desire_failure = c("error", "random"),
+  injections = NULL,
+  probes = NULL,
+  moderator_verbatim = FALSE,
+  call_on_silent = c("opening", "midpoint", "end"),
+  call_on_text = NULL,
+  handles = NULL,
+  final_summary = TRUE,
   .runner = NULL
 )
 }
 \arguments{
 \item{topic}{Character. Focus group topic.}
 
-\item{config}{An explicit `LLMR::llm_config` used by all agents and group-level
+\item{config}{An explicit \code{LLMR::llm_config} used by all agents and group-level
 model tasks.}
 
 \item{n_participants}{Integer. Number of participants, excluding the moderator.}
 
-\item{guide}{A named numeric vector or named list. Numeric values select that
+\item{guide}{A named numeric vector or named list. The names are phases,
+among \code{"Opening"}, \code{"Icebreaker"}, \code{"Engagement"}, \code{"Exploration"}, and
+\code{"Closing"}, each at most once and in that order. Numeric values select that
 many moderator instructions from the phase banks. Character vectors supply
 the ordered instructions directly. The default is a compact session (one
 opening, one icebreaker, two engagement and three exploration questions,
-one closing); with the default flow, participants, and response limit it
-plans 93 model outputs, inside the default `max_calls` of 100. Larger
-guides multiply quickly: each question round costs one output per
-response plus, under `"desire_based"`, one scoring output per
-participant.}
+one closing); with the default flow, participants, response limit, and
+call-ons it plans at most 111 model outputs, inside the default
+\code{max_calls} of 120. Larger guides multiply quickly: each question round
+costs one output per response plus, under \code{"desire_based"}, one scoring
+output per participant. \code{NULL} runs a minimal script: an opening, one
+open discussion of \code{topic}, and a closing.}
 
 \item{demographics}{Optional participant demographics, one row per
-participant. With this, `survey_responses`, and personas all absent, the
+participant. With this, \code{survey_responses}, and personas all absent, the
 participants are drawn from the bundled ANES 2024 records.}
 
 \item{survey_responses}{Optional participant survey answers, one row per
 participant.}
 
-\item{flow}{Character. One of `"round_robin"`, `"probabilistic"`, or
-`"desire_based"`.}
+\item{flow}{Character. One of \code{"round_robin"}, \code{"probabilistic"}, or
+\code{"desire_based"}.}
 
-\item{seed}{Optional integer governing in-package sampling.}
+\item{seed}{Optional whole number (a fraction such as 1.7 is an error)
+governing in-package sampling: the respondents
+drawn from the bundled records and the random choices of the turn-taking
+flow, such as the speaker draws of \code{"probabilistic"} and the tie-breaks of
+\code{"desire_based"}. The random waits of a provider's retries do not draw
+from this stream. The caller's random-number state is restored when the
+function returns. The option \code{focusgroup.seed}, when set, fixes the
+respondent draw instead.}
 
-\item{message_mode}{Character. `"roleflip"` or `"flat"`.}
+\item{message_mode}{Character. \code{"roleflip"} or \code{"flat"}.}
 
 \item{verbose}{Logical. Print session progress.}
 
 \item{max_participant_responses}{Optional integer maximum number of participant
-responses per moderator question (default 2).}
+responses per moderator question. \code{NULL}, the default, uses the option
+\code{focusgroup.max_participant_responses}, which is 2 unless you set it.}
 
 \item{max_calls}{Integer. Maximum estimated live model outputs allowed without
-confirmation.}
+confirmation; a finite whole number.}
 
-\item{confirm}{Logical. Permit a live run whose estimate exceeds `max_calls`.}
+\item{confirm}{Logical. Permit a live run whose estimate exceeds \code{max_calls}.}
+
+\item{max_tokens_config}{Optional named list of token limits by call type,
+as for \code{FocusGroup$new()}: \code{utterance}, \code{moderator}, \code{desire},
+\code{desire_retry}, \code{summary}, and \code{interim_summary}. A model that reasons
+before it answers needs \code{desire} and \code{desire_retry} large enough to hold
+its reasoning and the score.}
+
+\item{reasoning_effort}{Optional reasoning-effort setting passed to the
+provider: one string, such as \code{"low"}, for every call, or a named vector
+by call type (\code{"moderator"}, \code{"participant"}, \code{"desire"}, \code{"summary"},
+\code{"probe"}). It is written over the \code{reasoning_effort} of \code{config} for
+those calls; \code{NULL} leaves \code{config} as it is. LLMR forwards it on
+OpenAI-compatible providers.}
+
+\item{on_desire_failure}{Character. Under \code{"desire_based"}, what happens
+when a participant's desire score cannot be obtained after its retry.
+\code{"error"} (the default) stops the session with an error of class
+\code{focusgroup_desire_failure}, returned as a partial session as described
+in Details. \code{"random"} chooses the speaker among the participants with
+valid scores by the usual rule, and uniformly among the eligible
+participants only when none has a valid score; the failure is recorded
+in the selected message's \code{metadata$desire_scoring_failure}.}
+
+\item{injections}{Optional \code{\link[=fg_injection]{fg_injection()}} or list of injections, each
+placed into the session at its point. To compare sessions that share
+everything before an injection, use \code{\link[=run_focus_group_arms]{run_focus_group_arms()}}.}
+
+\item{probes}{Optional \code{\link[=fg_probe]{fg_probe()}} or list of probes, private questions
+asked of each participant at stated points. The answers are returned in
+\code{probes} and never enter the discussion.}
+
+\item{moderator_verbatim}{\code{FALSE} (the default) has the moderator's model
+render each guide item as a line of its own. \code{TRUE} delivers every guide
+item exactly as written, with no model call, and a vector of item
+numbers delivers those items so. A verbatim message carries
+\code{metadata$verbatim = TRUE}. The opening and closing instructions of the
+numeric phase banks are instructions to the moderator, so verbatim
+delivery suits a guide written as the lines to be said.}
+
+\item{call_on_silent}{Where the moderator calls on the participants who
+have not spoken since the previous such point, as described in Details:
+any of \code{"opening"}, \code{"midpoint"}, and \code{"end"} (the default is all
+three), guide item numbers, or \code{"none"} (or \code{FALSE}) for no call-ons.}
+
+\item{call_on_text}{The call-on line. It must contain \code{{participant}},
+which is replaced by the participant's handle; \code{NULL} uses
+"\{participant\}, I'd like to hear from you as well. What are your
+thoughts?".}
+
+\item{handles}{The labels under which the agents see each other: \code{NULL}
+(the default) for \code{"P1"}, \code{"P2"}, ... and \code{"Moderator"}, \code{"ids"} for the
+agent IDs, or a character vector of handles named by agent ID, as for
+\code{FocusGroup$new()}.}
+
+\item{final_summary}{Logical. \code{TRUE} (the default) ends the session with a
+model-written summary; \code{FALSE} makes no summary call and leaves
+\code{summary} empty.}
 
 \item{.runner}{Optional function used instead of live model calls. It
-receives a data frame with `config` and `messages` list-columns and returns
-those rows with at least `response_text`.}
+receives a data frame with \code{config} and \code{messages} list-columns and returns
+those rows with at least \code{response_text}. Token columns such as
+\code{sent_tokens}, \code{rec_tokens}, and \code{total_tokens} are optional; when they are
+absent, usage is unknown.}
 }
 \value{
-A `focus_group_result` with the group, transcript, summary,
-  participant table, token usage, and sanitized metadata.
+A \code{focus_group_result}, a list with these components:
+\describe{
+\item{focus_group}{The \code{FocusGroup} object that ran the session. It keeps
+the model configuration, so model analyses can be run on it later.}
+\item{transcript}{A data frame with one row per logged message, starting
+with the \code{"System"} message that lists the roster. Its columns are
+\code{message_id}, \code{round}, \code{item} (the guide item the message belongs
+to, 0 for the roster row), \code{speaker_id} (the agent ID), \code{handle} (the
+label the agents saw), \code{is_moderator}, \code{text}, \code{phase},
+\code{response_id}, \code{finish_reason}, \code{sent_tokens}, \code{rec_tokens},
+\code{total_tokens}, \code{duration_s}, \code{provider}, \code{model}, \code{timestamp} (in UTC),
+and the list-column \code{metadata}, which marks, among others, delivered
+lines (\code{verbatim}), injected messages (\code{injected}, \code{injection}),
+call-on lines (\code{call_on}, a list of \code{point}, \code{participant}, and
+\code{handle}), the replies to them (\code{called_on}), replies to a moderator
+line that addressed the speaker (\code{addressed}), replies whose
+self-label was removed (\code{self_label_removed}), replies whose
+opening self-introduction was removed (\code{preamble_removed}), and
+injected participant turns (\code{as_turn}; see \code{\link[=fg_injection]{fg_injection()}}).}
+\item{summary}{The final summary. It is \code{NA} when the final summary call
+failed, and \code{character(0)} in a partial result that stopped before it
+or in a session run with \code{final_summary = FALSE}.}
+\item{participants}{A data frame with one row per agent: \code{id}, \code{handle}, \code{role},
+\code{is_moderator}, \code{persona}, \code{communication_style} (the agent's
+style instruction), \code{demographics}, \code{survey_responses},
+\code{provider}, and \code{model}. When the participants were drawn from the
+bundled ANES records, the rows drawn are recorded in
+\code{attr(result$focus_group$agents, "source_rows")}.}
+\item{usage}{A list of the token subtotals \code{sent}, \code{rec}, and \code{total},
+and the count \code{unknown} described in Details. It records the session as
+run; model analyses run later add to the counters of \code{focus_group} but
+not to this list.}
+\item{metadata}{A list with \code{topic}, \code{purpose}, \code{flow}, \code{message_mode},
+\code{n_participants}, \code{estimated_calls}, \code{provider}, \code{model}, \code{complete}
+(\code{TRUE} for a finished session, \code{FALSE} for a partial one), and
+\code{failure} (\code{NULL}, or a list with the \code{phase} and \code{message} of the
+error that stopped the session); then the conditions of the run:
+\code{max_participant_responses}, \code{seed} (\code{NA} when none was given),
+\code{on_desire_failure}, \code{reasoning_effort}, \code{max_tokens} (the token
+limit of each call type), \code{call_settings} (a data frame giving, for
+each call type and agent, the provider, model, and model parameters
+the calls start from), \code{prompt_templates}, \code{standing_rules} (the
+system-message rules for participants and the moderator),
+\code{disclosure}, \code{versions} (of FocusGroup, LLMR, and R), \code{started}, and
+\code{branch} (\code{NULL}, or for a session run by \code{\link[=run_focus_group_arms]{run_focus_group_arms()}} its
+arm and branch point), \code{handles} (a data frame of \code{agent_id} and
+\code{handle}), \code{call_on_silent} (a list of the \code{points} and the guide
+\code{items} they fall on, both empty when call-ons are off),
+\code{call_on_text}, \code{final_summary}, \code{guide} (the guide items as the
+session ran them, each a list with \code{phase} and, when set, \code{text} and
+\code{verbatim}), and \code{flow_params} (the parameters of the turn-taking
+rule: \code{initial_propensities} and \code{recovery_increment} for
+\code{"probabilistic"}, \code{min_desire_threshold} and \code{on_desire_failure}
+for \code{"desire_based"}, none otherwise). It holds no configuration
+object.}
+\item{calls}{A data frame with one row per model call the session
+made, in order, including retries and failed calls: \code{call_id},
+\code{call_type} (\code{"moderator"}, \code{"participant"}, \code{"desire"}, \code{"summary"},
+\code{"interim_summary"}, or \code{"probe"}), \code{agent_id}, \code{attempt} (2 for a
+retry), \code{round}, \code{phase}, \code{message_id} (the message the call produced,
+if any), \code{provider}, \code{model}, the list-columns \code{settings} (the model
+parameters sent) and \code{messages} (the messages sent), \code{raw_text} (the
+reply before any cleaning), \code{thinking} (reasoning the provider returned
+separately), \code{cleaned_text}, \code{score} (for desire calls), \code{finish_reason},
+\code{response_id}, \code{sent_tokens}, \code{rec_tokens}, \code{total_tokens},
+\code{reasoning_tokens}, \code{duration_s}, \code{error} (the error a failed call
+raised), \code{timestamp}, and \code{arm} (the arm of a session continued by
+\code{\link[=run_focus_group_arms]{run_focus_group_arms()}}, otherwise \code{NA}). Only scalar sampling and
+length parameters enter \code{settings}; keys and endpoint addresses never
+do.}
+\item{routing}{A data frame with one row per speaker selection: \code{pick},
+\code{round}, \code{phase}, \code{turn} (the participant turn it chose for),
+\code{flow}, \code{rule} (such as \code{"rotation"}, \code{"propensity_draw"},
+\code{"highest_score"}, \code{"threshold_lowered"}, \code{"highest_below_threshold"},
+\code{"uniform_after_failure"}, or, for turns the flow did not choose,
+\code{"called_on"}, \code{"addressed"}, and \code{"injected"}), \code{selected_id},
+\code{message_id},
+\code{trigger_message_id} (for \code{"called_on"} and \code{"addressed"}, the
+moderator line that gave the turn; otherwise \code{NA}),
+\code{threshold}, \code{tie_break} (\code{"none"}, \code{"random"}, or \code{"draw"}),
+\code{scoring_mode}, and the list-columns \code{candidates}, \code{excluded} (named
+by participant, giving the reason, such as \code{"previous_speaker"} or
+\code{"score_failed"}), \code{scores} (desire scores, or selection
+probabilities for \code{"probabilistic"}), and \code{tied}, followed by \code{arm}.}
+\item{probes}{A data frame with one row per probe answer: \code{probe} (its
+label), \code{point}, \code{agent_id}, \code{question}, \code{answer} (the final answer,
+or \code{NA} when none came), \code{value} (the number read from the answer for
+a probe with a \code{scale}, otherwise \code{NA}; see \code{\link[=fg_probe]{fg_probe()}}), \code{raw_text},
+\code{finish_reason}, \code{attempts} (the calls made for the answer, retries
+and the re-ask included), \code{call_id} (the row in \code{calls} of the call
+that gave the answer), \code{round}, \code{phase}, \code{turn} (the next participant
+turn), \code{after_message_id} (the last message before it), and \code{arm}.}
+\item{injections}{A data frame with one row per injection: \code{label},
+\code{arm}, \code{point}, \code{delivered} (\code{FALSE} for one whose point the session
+never reached, which is also reported with a warning), \code{message_id},
+\code{speaker_id}, \code{from}, \code{visibility}, \code{text}, \code{cut_after_message_id}
+(the message it follows), \code{round}, \code{phase}, \code{turn}, \code{as_turn}
+(\code{TRUE} for a participant's injected turn), and \code{replaced} (for such
+a turn, the turn it took the place of: \code{"flow"}, \code{"addressed"}, or
+\code{"called_on"}; \code{"none"} for a line from someone other than the
+participant called on, who still answers next).}
+}
+Results saved by FocusGroup 0.5.2 and earlier lack \code{usage$unknown},
+\code{metadata$complete}, and \code{metadata$failure}; results saved by 0.5.3 and
+earlier lack \code{calls}, \code{routing}, \code{probes}, \code{injections}, and the metadata
+that follows \code{failure}; results saved by 0.5.4 and earlier lack the
+\code{item} and \code{handle} columns, \code{trigger_message_id}, and the metadata that
+follows \code{branch}; results saved by 0.5.5 and earlier lack the \code{value}
+and \code{attempts} columns of \code{probes}, \code{communication_style} in
+\code{participants}, \code{as_turn} and \code{replaced} in \code{injections}, and
+\code{metadata$guide} and \code{metadata$flow_params}.
+
+A result is saved whole with \code{\link[=saveRDS]{saveRDS()}}, and its \code{focus_group} then
+holds the model configuration, which may contain a literal API key or a
+private endpoint, and the runner. \code{format()} writes the record without
+them, one JSON object per line, for a file that
+\code{\link[=focus_group_from_transcript]{focus_group_from_transcript()}} reads back; see
+\code{\link[=format.focus_group_result]{format.focus_group_result()}}.
 }
 \description{
 Constructs the agents, moderator guide, and turn-taking flow, then runs one
-focus group session. `config` has no default; every agent and group-level
-call uses the one supplied. Before a live run,
-the function estimates the number of generated model outputs and applies the
-`max_calls` limit unless `confirm` is `TRUE`.
+focus group session. \code{config} has no default; every agent and group-level
+call uses the one supplied. Before a live run, the function estimates the
+number of generated model outputs and applies the \code{max_calls} limit unless
+\code{confirm} is \code{TRUE}.
+}
+\details{
+At the end of each call-on item's discussion the moderator calls on every
+participant who has not spoken since the previous call-on point, or since
+the start for the first, in roster order. \code{"opening"} is the first guide
+item participants answer, \code{"midpoint"} the middle one, and \code{"end"} the
+last; points that fall on the same item count once, and item numbers count
+every guide item, as \code{\link[=fg_after_item]{fg_after_item()}} does. Each call-on line is
+delivered as written, with no model call, and carries
+\code{metadata$call_on}; the participant then answers, with a cue in the turn
+instruction and no desire score, and the reply carries
+\code{metadata$called_on = TRUE}. With the default guide the points are items
+2, 4, and 7, so every participant speaks during the icebreaker. Krueger
+(2002) describes the opening question of a focus group as a round robin.
+
+The participants and the moderator see each other under handles, never
+under the IDs of the records: the IDs of \code{\link[=create_agents]{create_agents()}} are already
+\code{"P1"}, \code{"P2"}, ..., and the moderator appears as \code{"Moderator"}. When
+the moderator's last question opens or closes with one participant's
+handle ("P3, do you agree?", "P3: what do you think?", "Could you say
+more, P3?"), or is a short follow-up naming one ("And P3?", "What about
+P3?"), and does not also put it to the group, that participant takes the
+next turn, without a
+desire score and with a sentence in its turn instruction saying that the
+question was put to it, and the reply carries \code{metadata$addressed = TRUE}.
+A label
+a speaker writes for itself at the start of its reply (\verb{**MOD:**},
+\verb{P3:}) is removed, and the message carries
+\code{metadata$self_label_removed = TRUE}. A short opening self-introduction
+("As a teacher, ", "As a retired nurse, ") is removed too, and the
+message carries \code{metadata$preamble_removed = TRUE}; a longer opening
+clause, or one that belongs to the statement ("As a teacher I grade
+papers at night, ...", "As a result, ...", "As an alternative, ..."), is
+kept. In both cases the
+reply as returned stays in \code{calls}.
+
+The estimate counts one output for each moderator turn the model writes,
+one for each participant response a question round allows, one for each
+participant at each call-on point, one for each probe answer (two when the
+probe has a \code{scale}, for a possible re-ask), and one for the final
+summary. Under
+\code{"desire_based"} it adds one desire score per participant before each
+response the flow chooses. With the default guide, six participants, and
+the default flow, two responses per question give an estimate of 111
+outputs (93 without call-ons) and three give 153. A session can make
+fewer calls, since the desire-based flow does not score the previous
+speaker, an addressed turn needs no scores, and a call-on point calls on
+only the participants who have been silent, or more, since incomplete
+replies are retried and a long discussion triggers interim summaries.
+\code{max_calls} applies to the estimate, and only to live runs: with
+\code{.runner} the session runs whatever the estimate.
+
+When a model call fails partway through the session (a provider error that
+persists after retries, an error from \code{.runner}, a reply still incomplete
+after its retry, or a failed interim summary), the turns already completed
+are not lost. The function raises an error of class
+\code{focusgroup_incomplete_session} whose \code{partial} field holds the
+\code{focus_group_result} built from those turns, with \code{metadata$complete} set to
+\code{FALSE}. The error's \code{phase} field names the script phase that was running,
+such as \code{"engagement_question"}, or \code{"interim_summary"}, and its \code{parent}
+field holds the original error. Errors raised before the session starts,
+such as an invalid argument or the \code{max_calls} check, carry no partial
+result. A failed final summary is not an error of this kind: the function
+warns and returns the complete transcript with an \code{NA} summary.
+
+Token usage that a provider did not report is unknown, not zero. A call's
+total is its reported total, or the sum of its sent and received counts when
+both are known. The \code{usage} component adds the reported counts of every
+call FocusGroup makes, including retries of incomplete replies, desire
+scores, and interim summaries, and its \code{unknown} element counts the calls
+whose usage was incomplete. When \code{unknown} is positive the subtotals are
+lower bounds, and when it is \code{NA}, as after a call that raised an error, the
+number of such calls cannot be determined. Retries made inside
+\code{LLMR::call_llm_robust()} are not visible here and are not counted. A
+reported count that is not a nonnegative whole number is treated as
+unknown, with a warning.
+
+In the transcript, a message's token count is \code{NA} unless every call behind
+the message reported it. The message's \code{metadata} element \code{usage_unknown}
+gives the number of those calls whose usage was incomplete.
 }
 \examples{
 cfg <- LLMR::llm_config("groq", "openai/gpt-oss-20b",
@@ -102,16 +378,27 @@ result <- run_focus_group(
 )
 result$transcript[, c("speaker_id", "phase", "text")]
 
-\donttest{
-if (nzchar(Sys.getenv("GROQ_API_KEY"))) {
-  live <- run_focus_group(
-    topic = "Library funding priorities",
-    config = cfg,
-    n_participants = 4,
-    guide = guide,
-    flow = "round_robin"
-  )
-  live$summary
+# The scripted runner reports no token counts, so usage is unknown.
+result$usage
+
+# A session that fails partway returns what it completed.
+failing <- local({
+  calls <- 0
+  function(experiments, ...) {
+    calls <<- calls + 1
+    if (calls == 3) stop("The provider is unavailable.")
+    scripted(experiments)
+  }
+})
+partial <- tryCatch(
+  run_focus_group("Library funding priorities", cfg, n_participants = 2,
+                  guide = guide, flow = "round_robin", verbose = FALSE,
+                  .runner = failing),
+  focusgroup_incomplete_session = function(e) e$partial
+)
+partial$metadata[c("complete", "failure")]
 }
-}
+\references{
+Krueger, R. A. (2002). \emph{Designing and Conducting Focus Group
+Interviews}. University of Minnesota.
 }

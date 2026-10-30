@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 
 
-<meta name="date" content="2026-09-01" />
+<meta name="date" content="2026-10-25" />
 
 <title>Focus Group Analysis</title>
 
@@ -338,7 +338,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 
 
 <h1 class="title toc-ignore">Focus Group Analysis</h1>
-<h4 class="date">2026-09-01</h4>
+<h4 class="date">2026-10-25</h4>
 
 
 
@@ -390,7 +390,8 @@ components: <code>focus_group</code>, <code>transcript</code>,
 <code>round</code> identifies the moderator cycle, so a moderator
 question and its participant responses share a round. <code>phase</code>
 retains the guide phase. Generated rows also carry provider response
-metadata and token counts.</p>
+metadata and token counts; a count the provider did not report is
+<code>NA</code>.</p>
 </div>
 <div id="run-descriptive-analysis-offline" class="section level2">
 <h2>Run descriptive analysis offline</h2>
@@ -446,8 +447,9 @@ the result.</p>
 <h2>Import and analyze an existing transcript</h2>
 <p>Importing a transcript creates no model output. Pass
 <code>moderator_id</code> when the moderator is known. If it is omitted,
-the importer uses the documented substring fallback on speaker
-identifiers.</p>
+a speaker named exactly <code>mod</code>, <code>moderator</code>,
+<code>facilitator</code>, or <code>interviewer</code> (in any case) is
+the moderator.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>transcript <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
 <span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>  <span class="at">speaker =</span> <span class="fu">c</span>(<span class="st">&quot;Facilitator&quot;</span>, <span class="st">&quot;Ana&quot;</span>, <span class="st">&quot;Ben&quot;</span>, <span class="st">&quot;Ana&quot;</span>),</span>
 <span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>  <span class="at">text =</span> <span class="fu">c</span>(</span>
@@ -467,35 +469,216 @@ identifiers.</p>
 <span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a>imported_analysis <span class="ot">&lt;-</span> <span class="fu">analyze_focus_group</span>(imported, <span class="at">include_plots =</span> <span class="cn">FALSE</span>)</span>
 <span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="fu">print</span>(imported_analysis)</span></code></pre></div>
 </div>
+<div id="summarize-a-discussion" class="section level2">
+<h2>Summarize a discussion</h2>
+<p><code>summarize_focus_group()</code> summarizes a session, a set of
+arms, or an imported transcript by participant, guide item,
+disagreement, trajectory, turn, or the whole session, at one or more of
+three lengths: <code>&quot;headline&quot;</code>, <code>&quot;brief&quot;</code>, and
+<code>&quot;detailed&quot;</code>. The model returns claims as JSON. Each claim
+gives its status (<code>&quot;stated&quot;</code>, <code>&quot;implied&quot;</code>,
+<code>&quot;contradictory&quot;</code>, or <code>&quot;not_stated&quot;</code>), the ids of
+the messages it rests on, and any words it quotes. Every claim is
+checked against the transcript before prose is rendered from it: the
+cited messages must exist and be by the speakers the claim names, each
+quote must appear in the message it cites, and a claim for the whole
+group must cite every participant who spoke.</p>
+<p>The chunks below run offline. The scripted runner stands in for the
+model: it reads the transcript from the prompt and answers with one
+claim per participant, quoting the first five words of that
+participant’s first message. A live call passes <code>config</code> and
+no runner.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>transcript <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>  <span class="at">speaker =</span> <span class="fu">c</span>(<span class="st">&quot;Facilitator&quot;</span>, <span class="st">&quot;Ana&quot;</span>, <span class="st">&quot;Ben&quot;</span>, <span class="st">&quot;Ana&quot;</span>, <span class="st">&quot;Facilitator&quot;</span>, <span class="st">&quot;Ben&quot;</span>),</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>  <span class="at">text =</span> <span class="fu">c</span>(</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>    <span class="st">&quot;What should change about the library hours?&quot;</span>,</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>    <span class="st">&quot;Evening hours help working parents like me.&quot;</span>,</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>    <span class="st">&quot;I see it differently. Mornings are too crowded now.&quot;</span>,</span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a>    <span class="st">&quot;Crowded mornings still beat being locked out after work.&quot;</span>,</span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a>    <span class="st">&quot;What would you give up to pay for longer hours?&quot;</span>,</span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a>    <span class="st">&quot;I would give up the Sunday story hour before anything else.&quot;</span></span>
+<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a>  )</span>
+<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a>)</span>
+<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a>imported <span class="ot">&lt;-</span> <span class="fu">focus_group_from_transcript</span>(</span>
+<span id="cb7-13"><a href="#cb7-13" tabindex="-1"></a>  transcript,</span>
+<span id="cb7-14"><a href="#cb7-14" tabindex="-1"></a>  <span class="at">topic =</span> <span class="st">&quot;Library hours&quot;</span>,</span>
+<span id="cb7-15"><a href="#cb7-15" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;Facilitator&quot;</span></span>
+<span id="cb7-16"><a href="#cb7-16" tabindex="-1"></a>)</span>
+<span id="cb7-17"><a href="#cb7-17" tabindex="-1"></a></span>
+<span id="cb7-18"><a href="#cb7-18" tabindex="-1"></a>scripted <span class="ot">&lt;-</span> <span class="cf">function</span>(experiments, ...) {</span>
+<span id="cb7-19"><a href="#cb7-19" tabindex="-1"></a>  prompt <span class="ot">&lt;-</span> experiments<span class="sc">$</span>messages[[<span class="dv">1</span>]][[<span class="dv">1</span>]]<span class="sc">$</span>content</span>
+<span id="cb7-20"><a href="#cb7-20" tabindex="-1"></a>  unit <span class="ot">&lt;-</span> <span class="fu">sub</span>(<span class="st">&quot;.*one participant, (P[0-9]+)</span><span class="sc">\\</span><span class="st">..*&quot;</span>, <span class="st">&quot;</span><span class="sc">\\</span><span class="st">1&quot;</span>, prompt)</span>
+<span id="cb7-21"><a href="#cb7-21" tabindex="-1"></a>  lines <span class="ot">&lt;-</span> <span class="fu">regmatches</span>(prompt, <span class="fu">gregexpr</span>(<span class="st">&quot;</span><span class="sc">\\</span><span class="st">[#[0-9]+</span><span class="sc">\\</span><span class="st">] P[0-9]+: [^</span><span class="sc">\n</span><span class="st">]*&quot;</span>, prompt))[[<span class="dv">1</span>]]</span>
+<span id="cb7-22"><a href="#cb7-22" tabindex="-1"></a>  own <span class="ot">&lt;-</span> lines[<span class="fu">grepl</span>(<span class="fu">paste0</span>(<span class="st">&quot;^</span><span class="sc">\\</span><span class="st">[#[0-9]+</span><span class="sc">\\</span><span class="st">] &quot;</span>, unit, <span class="st">&quot;: &quot;</span>), lines)][<span class="dv">1</span>]</span>
+<span id="cb7-23"><a href="#cb7-23" tabindex="-1"></a>  id <span class="ot">&lt;-</span> <span class="fu">as.integer</span>(<span class="fu">sub</span>(<span class="st">&quot;^</span><span class="sc">\\</span><span class="st">[#([0-9]+)</span><span class="sc">\\</span><span class="st">].*&quot;</span>, <span class="st">&quot;</span><span class="sc">\\</span><span class="st">1&quot;</span>, own))</span>
+<span id="cb7-24"><a href="#cb7-24" tabindex="-1"></a>  words <span class="ot">&lt;-</span> <span class="fu">strsplit</span>(<span class="fu">sub</span>(<span class="st">&quot;^[^:]*: &quot;</span>, <span class="st">&quot;&quot;</span>, own), <span class="st">&quot; &quot;</span>)[[<span class="dv">1</span>]]</span>
+<span id="cb7-25"><a href="#cb7-25" tabindex="-1"></a>  claim <span class="ot">&lt;-</span> <span class="fu">list</span>(</span>
+<span id="cb7-26"><a href="#cb7-26" tabindex="-1"></a>    <span class="at">id =</span> <span class="dv">1</span>, <span class="at">unit =</span> unit, <span class="at">kind =</span> <span class="st">&quot;position&quot;</span>, <span class="at">status =</span> <span class="st">&quot;stated&quot;</span>,</span>
+<span id="cb7-27"><a href="#cb7-27" tabindex="-1"></a>    <span class="at">text =</span> <span class="fu">paste</span>(unit, <span class="st">&quot;gave a view on the hours.&quot;</span>),</span>
+<span id="cb7-28"><a href="#cb7-28" tabindex="-1"></a>    <span class="at">speakers =</span> <span class="fu">list</span>(unit), <span class="at">evidence =</span> <span class="fu">list</span>(id), <span class="at">context =</span> <span class="fu">list</span>(),</span>
+<span id="cb7-29"><a href="#cb7-29" tabindex="-1"></a>    <span class="at">quotes =</span> <span class="fu">list</span>(<span class="fu">list</span>(<span class="at">message_id =</span> id, <span class="at">speaker =</span> unit,</span>
+<span id="cb7-30"><a href="#cb7-30" tabindex="-1"></a>                       <span class="at">text =</span> <span class="fu">paste</span>(words[<span class="dv">1</span><span class="sc">:</span><span class="dv">5</span>], <span class="at">collapse =</span> <span class="st">&quot; &quot;</span>)))</span>
+<span id="cb7-31"><a href="#cb7-31" tabindex="-1"></a>  )</span>
+<span id="cb7-32"><a href="#cb7-32" tabindex="-1"></a>  reply <span class="ot">&lt;-</span> <span class="fu">list</span>(<span class="at">claims =</span> <span class="fu">list</span>(claim),</span>
+<span id="cb7-33"><a href="#cb7-33" tabindex="-1"></a>                <span class="at">levels =</span> <span class="fu">list</span>(<span class="at">headline =</span> <span class="fu">list</span>(<span class="dv">1</span>), <span class="at">brief =</span> <span class="fu">list</span>(<span class="dv">1</span>)))</span>
+<span id="cb7-34"><a href="#cb7-34" tabindex="-1"></a>  experiments<span class="sc">$</span>response_text <span class="ot">&lt;-</span> <span class="fu">as.character</span>(jsonlite<span class="sc">::</span><span class="fu">toJSON</span>(reply, <span class="at">auto_unbox =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb7-35"><a href="#cb7-35" tabindex="-1"></a>  experiments</span>
+<span id="cb7-36"><a href="#cb7-36" tabindex="-1"></a>}</span>
+<span id="cb7-37"><a href="#cb7-37" tabindex="-1"></a></span>
+<span id="cb7-38"><a href="#cb7-38" tabindex="-1"></a>summary_config <span class="ot">&lt;-</span> LLMR<span class="sc">::</span><span class="fu">llm_config</span>(<span class="st">&quot;openai&quot;</span>, <span class="st">&quot;gpt-4o-mini&quot;</span>)</span>
+<span id="cb7-39"><a href="#cb7-39" tabindex="-1"></a>by_person <span class="ot">&lt;-</span> <span class="fu">summarize_focus_group</span>(</span>
+<span id="cb7-40"><a href="#cb7-40" tabindex="-1"></a>  imported, summary_config,</span>
+<span id="cb7-41"><a href="#cb7-41" tabindex="-1"></a>  <span class="at">compression =</span> <span class="fu">c</span>(<span class="st">&quot;headline&quot;</span>, <span class="st">&quot;brief&quot;</span>),</span>
+<span id="cb7-42"><a href="#cb7-42" tabindex="-1"></a>  <span class="at">.runner =</span> scripted</span>
+<span id="cb7-43"><a href="#cb7-43" tabindex="-1"></a>)</span>
+<span id="cb7-44"><a href="#cb7-44" tabindex="-1"></a>by_person</span>
+<span id="cb7-45"><a href="#cb7-45" tabindex="-1"></a><span class="co">#&gt; &lt;focus_group_summary&gt;</span></span>
+<span id="cb7-46"><a href="#cb7-46" tabindex="-1"></a><span class="co">#&gt; By: participant | Lengths: headline, brief</span></span>
+<span id="cb7-47"><a href="#cb7-47" tabindex="-1"></a><span class="co">#&gt; Model: openai/gpt-4o-mini | Calls: 2 | Structured output: schema</span></span>
+<span id="cb7-48"><a href="#cb7-48" tabindex="-1"></a><span class="co">#&gt; Claims kept: 2 | Quotes: 2</span></span>
+<span id="cb7-49"><a href="#cb7-49" tabindex="-1"></a><span class="co">#&gt; P1: P1 gave a view on the hours.</span></span>
+<span id="cb7-50"><a href="#cb7-50" tabindex="-1"></a><span class="co">#&gt; P2: P2 gave a view on the hours.</span></span></code></pre></div>
+<p>The summarizing model labels the speakers by their handles: Ana and
+Ben are labeled P1 and P2, and the facilitator Moderator. Names inside
+the messages reach it as written, as the speakers said them. The
+researcher’s columns keep the names, and each quote is cut from the
+message as recorded.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>by_person<span class="sc">$</span>metadata<span class="sc">$</span>handles</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="co">#&gt;    speaker_id      handle     label        role</span></span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt; 1 Facilitator Facilitator Moderator   moderator</span></span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a><span class="co">#&gt; 2         Ana         Ana        P1 participant</span></span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a><span class="co">#&gt; 3         Ben         Ben        P2 participant</span></span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a>by_person<span class="sc">$</span>claims[, <span class="fu">c</span>(<span class="st">&quot;unit&quot;</span>, <span class="st">&quot;status&quot;</span>, <span class="st">&quot;text&quot;</span>)]</span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="co">#&gt;   unit status                         text</span></span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt; 1   P1 stated P1 gave a view on the hours.</span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; 2   P2 stated P2 gave a view on the hours.</span></span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a>by_person<span class="sc">$</span>quotes[, <span class="fu">c</span>(<span class="st">&quot;unit&quot;</span>, <span class="st">&quot;message_id&quot;</span>, <span class="st">&quot;speaker_id&quot;</span>, <span class="st">&quot;verbatim&quot;</span>, <span class="st">&quot;start&quot;</span>, <span class="st">&quot;end&quot;</span>)]</span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt;   unit message_id speaker_id                           verbatim start end</span></span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt; 1   P1          2        Ana Evening hours help working parents     1  34</span></span>
+<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="co">#&gt; 2   P2          3        Ben     I see it differently. Mornings     1  30</span></span></code></pre></div>
+<p>A quote passes when it occurs in the cited message once case,
+whitespace, and quotation marks are set aside; <code>verbatim</code>,
+<code>start</code>, and <code>end</code> give it as it stands in the
+source. A reply that fails a check is sent back once, with each failure
+stated. Here the first reply about P2 misquotes the message:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a>calls <span class="ot">&lt;-</span> <span class="dv">0</span><span class="dt">L</span></span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a>misquote_once <span class="ot">&lt;-</span> <span class="cf">function</span>(experiments, ...) {</span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a>  calls <span class="ot">&lt;&lt;-</span> calls <span class="sc">+</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a>  out <span class="ot">&lt;-</span> <span class="fu">scripted</span>(experiments, ...)</span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a>  <span class="cf">if</span> (calls <span class="sc">==</span> <span class="dv">2</span><span class="dt">L</span>) {</span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a>    out<span class="sc">$</span>response_text <span class="ot">&lt;-</span> <span class="fu">sub</span>(<span class="st">&quot;I see it differently.&quot;</span>, <span class="st">&quot;I see it quite differently.&quot;</span>,</span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a>                             out<span class="sc">$</span>response_text, <span class="at">fixed =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a>  }</span>
+<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a>  out</span>
+<span id="cb9-10"><a href="#cb9-10" tabindex="-1"></a>}</span>
+<span id="cb9-11"><a href="#cb9-11" tabindex="-1"></a>reasked <span class="ot">&lt;-</span> <span class="fu">summarize_focus_group</span>(</span>
+<span id="cb9-12"><a href="#cb9-12" tabindex="-1"></a>  imported, summary_config,</span>
+<span id="cb9-13"><a href="#cb9-13" tabindex="-1"></a>  <span class="at">compression =</span> <span class="st">&quot;headline&quot;</span>,</span>
+<span id="cb9-14"><a href="#cb9-14" tabindex="-1"></a>  <span class="at">.runner =</span> misquote_once</span>
+<span id="cb9-15"><a href="#cb9-15" tabindex="-1"></a>)</span>
+<span id="cb9-16"><a href="#cb9-16" tabindex="-1"></a>reasked<span class="sc">$</span>calls[, <span class="fu">c</span>(<span class="st">&quot;call_id&quot;</span>, <span class="st">&quot;unit&quot;</span>, <span class="st">&quot;attempt&quot;</span>)]</span>
+<span id="cb9-17"><a href="#cb9-17" tabindex="-1"></a><span class="co">#&gt;   call_id unit attempt</span></span>
+<span id="cb9-18"><a href="#cb9-18" tabindex="-1"></a><span class="co">#&gt; 1       1   P1       1</span></span>
+<span id="cb9-19"><a href="#cb9-19" tabindex="-1"></a><span class="co">#&gt; 2       2   P2       1</span></span>
+<span id="cb9-20"><a href="#cb9-20" tabindex="-1"></a><span class="co">#&gt; 3       3   P2       2</span></span>
+<span id="cb9-21"><a href="#cb9-21" tabindex="-1"></a><span class="fu">cat</span>(reasked<span class="sc">$</span>calls<span class="sc">$</span>messages[[<span class="dv">3</span>]][[<span class="dv">3</span>]]<span class="sc">$</span>content)</span>
+<span id="cb9-22"><a href="#cb9-22" tabindex="-1"></a><span class="co">#&gt; Your reply did not pass these checks:</span></span>
+<span id="cb9-23"><a href="#cb9-23" tabindex="-1"></a><span class="co">#&gt; - Quote 1 of claim 1 is not in message 3. Message 3 reads: &quot;I see it differently. Mornings are too crowded now.&quot;</span></span>
+<span id="cb9-24"><a href="#cb9-24" tabindex="-1"></a><span class="co">#&gt; - The reply has no claim that reports what P2 said; give at least one claim with &quot;unit&quot;: &quot;P2&quot;, P2 among its speakers, and a message by P2 as evidence.</span></span>
+<span id="cb9-25"><a href="#cb9-25" tabindex="-1"></a><span class="co">#&gt; - The &quot;headline&quot; list has no claim that passed the checks.</span></span>
+<span id="cb9-26"><a href="#cb9-26" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb9-27"><a href="#cb9-27" tabindex="-1"></a><span class="co">#&gt; Reply again with the complete JSON object in the same format, with every point above corrected. Cite only messages shown in the transcript, copy each quote exactly from the message it cites, and give the status &quot;not_stated&quot; to anything the transcript does not show.</span></span></code></pre></div>
+<p>When the second reply fails as well, the run stops with an error of
+class <code>focusgroup_summary_check_failure</code>; its
+<code>partial</code> field holds the units completed before it, and its
+<code>checks</code> and <code>replies</code> fields show what failed.
+With <code>on_fail = &quot;drop&quot;</code> the failing claims move to
+<code>rejected</code> instead, except claims of a disagreement, of a
+position held by one participant alone, or of a change, which still stop
+the run.</p>
+<p><code>by = &quot;item&quot;</code> sends one guide item at a time, which also
+keeps a long session within the prompt window. <code>by = &quot;turn&quot;</code>
+gives the gist of every message. <code>by = &quot;trajectory&quot;</code> follows
+the discussion through stages fixed in advance: thirds of the
+participant turns for the headline, one stage per guide item for the
+longer lengths. <code>by = &quot;disagreements&quot;</code> lists each
+disagreement, and each position held by one participant alone, with how
+it ended. Private probe answers reach the model only with
+<code>include_probes = TRUE</code>.</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>by_item <span class="ot">&lt;-</span> <span class="fu">summarize_focus_group</span>(</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>  result, config,</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a>  <span class="at">by =</span> <span class="st">&quot;item&quot;</span>,</span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a>  <span class="at">compression =</span> <span class="fu">c</span>(<span class="st">&quot;headline&quot;</span>, <span class="st">&quot;detailed&quot;</span>)</span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a>)</span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a>by_item<span class="sc">$</span>summaries</span></code></pre></div>
+<p><code>fg_turns()</code> gives the turn table the summaries read, with
+no model call: each message’s guide item, handle, and length, and how
+the speaker came to have the floor. An imported transcript has no
+routing record, so every link is <code>&quot;sequence&quot;</code>.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="fu">fg_turns</span>(imported)[, <span class="fu">c</span>(<span class="st">&quot;message_id&quot;</span>, <span class="st">&quot;item&quot;</span>, <span class="st">&quot;speaker_id&quot;</span>, <span class="st">&quot;handle&quot;</span>, <span class="st">&quot;words&quot;</span>, <span class="st">&quot;link&quot;</span>)]</span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="co">#&gt;   message_id item  speaker_id      handle words     link</span></span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a><span class="co">#&gt; 1          1    1 Facilitator Facilitator     7 sequence</span></span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a><span class="co">#&gt; 2          2    1         Ana         Ana     7 sequence</span></span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a><span class="co">#&gt; 3          3    1         Ben         Ben     9 sequence</span></span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a><span class="co">#&gt; 4          4    1         Ana         Ana     9 sequence</span></span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a><span class="co">#&gt; 5          5    2 Facilitator Facilitator    10 sequence</span></span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a><span class="co">#&gt; 6          6    2         Ben         Ben    11 sequence</span></span></code></pre></div>
+</div>
+<div id="replay-a-session" class="section level2">
+<h2>Replay a session</h2>
+<p><code>fg_player()</code> writes a session to a self-contained HTML
+file that steps through it message by message, built from the records
+the session saved and without any model call. The package includes a
+synthetic session made with a scripted runner, which the chunk below
+replays; <code>open = FALSE</code> keeps the browser closed while the
+vignette is built.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a>session <span class="ot">&lt;-</span> <span class="fu">readRDS</span>(<span class="fu">system.file</span>(<span class="st">&quot;extdata&quot;</span>, <span class="st">&quot;player-session.rds&quot;</span>,</span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a>                               <span class="at">package =</span> <span class="st">&quot;FocusGroup&quot;</span>))</span>
+<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a>page <span class="ot">&lt;-</span> <span class="fu">fg_player</span>(session, <span class="at">file =</span> <span class="fu">tempfile</span>(<span class="at">fileext =</span> <span class="st">&quot;.html&quot;</span>), <span class="at">open =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a><span class="fu">file.exists</span>(page)</span>
+<span id="cb12-5"><a href="#cb12-5" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span>
+<span id="cb12-6"><a href="#cb12-6" tabindex="-1"></a><span class="fu">table</span>(session<span class="sc">$</span>routing<span class="sc">$</span>rule)</span>
+<span id="cb12-7"><a href="#cb12-7" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb12-8"><a href="#cb12-8" tabindex="-1"></a><span class="co">#&gt;     addressed     called_on highest_score </span></span>
+<span id="cb12-9"><a href="#cb12-9" tabindex="-1"></a><span class="co">#&gt;             1             2             5</span></span></code></pre></div>
+<p>Each speaker selection in <code>session$routing</code> appears as a
+panel before the turn it chose. Under desire-based selection the panel
+shows the score of every participant asked, marks the previous speaker
+as not asked, and states whether a tie was drawn at random; a call-on or
+a participant addressed by the moderator is marked as such. For a
+printable page, use <code>mode = &quot;static&quot;</code>; for a study with arms,
+pass the result of <code>run_focus_group_arms()</code> to write one file
+per arm.</p>
+</div>
 <div id="construct-the-objects-directly" class="section level2">
 <h2>Construct the objects directly</h2>
 <p>The R6 interface exposes the parts assembled by
 <code>run_focus_group()</code>.</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>agents <span class="ot">&lt;-</span> <span class="fu">create_agents</span>(</span>
-<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>  <span class="at">n_participants =</span> <span class="dv">3</span>,</span>
-<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>  <span class="at">demographics =</span> <span class="fu">data.frame</span>(</span>
-<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>    <span class="at">age =</span> <span class="fu">c</span>(<span class="dv">25</span>, <span class="dv">35</span>, <span class="dv">45</span>),</span>
-<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>    <span class="at">gender =</span> <span class="fu">c</span>(<span class="st">&quot;male&quot;</span>, <span class="st">&quot;female&quot;</span>, <span class="st">&quot;non-binary&quot;</span>),</span>
-<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>    <span class="at">education =</span> <span class="fu">c</span>(<span class="st">&quot;high school&quot;</span>, <span class="st">&quot;bachelor&#39;s&quot;</span>, <span class="st">&quot;master&#39;s&quot;</span>),</span>
-<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a>    <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span></span>
-<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a>  ),</span>
-<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a>  <span class="at">config =</span> config</span>
-<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a>)</span>
-<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a></span>
-<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a>flow <span class="ot">&lt;-</span> <span class="fu">create_conversation_flow</span>(</span>
-<span id="cb7-13"><a href="#cb7-13" tabindex="-1"></a>  <span class="at">mode =</span> <span class="st">&quot;desire_based&quot;</span>,</span>
-<span id="cb7-14"><a href="#cb7-14" tabindex="-1"></a>  <span class="at">agents =</span> agents,</span>
-<span id="cb7-15"><a href="#cb7-15" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;MOD&quot;</span></span>
-<span id="cb7-16"><a href="#cb7-16" tabindex="-1"></a>)</span>
-<span id="cb7-17"><a href="#cb7-17" tabindex="-1"></a></span>
-<span id="cb7-18"><a href="#cb7-18" tabindex="-1"></a>fg <span class="ot">&lt;-</span> FocusGroup<span class="sc">$</span><span class="fu">new</span>(</span>
-<span id="cb7-19"><a href="#cb7-19" tabindex="-1"></a>  <span class="at">topic =</span> <span class="st">&quot;Impact of Social Media on Mental Health&quot;</span>,</span>
-<span id="cb7-20"><a href="#cb7-20" tabindex="-1"></a>  <span class="at">purpose =</span> <span class="st">&quot;Explore perspectives and experiences related to social media.&quot;</span>,</span>
-<span id="cb7-21"><a href="#cb7-21" tabindex="-1"></a>  <span class="at">agents =</span> agents,</span>
-<span id="cb7-22"><a href="#cb7-22" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;MOD&quot;</span>,</span>
-<span id="cb7-23"><a href="#cb7-23" tabindex="-1"></a>  <span class="at">turn_taking_flow =</span> flow,</span>
-<span id="cb7-24"><a href="#cb7-24" tabindex="-1"></a>  <span class="at">admin_config =</span> config</span>
-<span id="cb7-25"><a href="#cb7-25" tabindex="-1"></a>)</span></code></pre></div>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>agents <span class="ot">&lt;-</span> <span class="fu">create_agents</span>(</span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a>  <span class="at">n_participants =</span> <span class="dv">3</span>,</span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>  <span class="at">demographics =</span> <span class="fu">data.frame</span>(</span>
+<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a>    <span class="at">age =</span> <span class="fu">c</span>(<span class="dv">25</span>, <span class="dv">35</span>, <span class="dv">45</span>),</span>
+<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a>    <span class="at">gender =</span> <span class="fu">c</span>(<span class="st">&quot;male&quot;</span>, <span class="st">&quot;female&quot;</span>, <span class="st">&quot;non-binary&quot;</span>),</span>
+<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a>    <span class="at">education =</span> <span class="fu">c</span>(<span class="st">&quot;high school&quot;</span>, <span class="st">&quot;bachelor&#39;s&quot;</span>, <span class="st">&quot;master&#39;s&quot;</span>),</span>
+<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a>    <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span></span>
+<span id="cb13-8"><a href="#cb13-8" tabindex="-1"></a>  ),</span>
+<span id="cb13-9"><a href="#cb13-9" tabindex="-1"></a>  <span class="at">config =</span> config</span>
+<span id="cb13-10"><a href="#cb13-10" tabindex="-1"></a>)</span>
+<span id="cb13-11"><a href="#cb13-11" tabindex="-1"></a></span>
+<span id="cb13-12"><a href="#cb13-12" tabindex="-1"></a>flow <span class="ot">&lt;-</span> <span class="fu">create_conversation_flow</span>(</span>
+<span id="cb13-13"><a href="#cb13-13" tabindex="-1"></a>  <span class="at">mode =</span> <span class="st">&quot;desire_based&quot;</span>,</span>
+<span id="cb13-14"><a href="#cb13-14" tabindex="-1"></a>  <span class="at">agents =</span> agents,</span>
+<span id="cb13-15"><a href="#cb13-15" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;MOD&quot;</span></span>
+<span id="cb13-16"><a href="#cb13-16" tabindex="-1"></a>)</span>
+<span id="cb13-17"><a href="#cb13-17" tabindex="-1"></a></span>
+<span id="cb13-18"><a href="#cb13-18" tabindex="-1"></a>fg <span class="ot">&lt;-</span> FocusGroup<span class="sc">$</span><span class="fu">new</span>(</span>
+<span id="cb13-19"><a href="#cb13-19" tabindex="-1"></a>  <span class="at">topic =</span> <span class="st">&quot;Impact of Social Media on Mental Health&quot;</span>,</span>
+<span id="cb13-20"><a href="#cb13-20" tabindex="-1"></a>  <span class="at">purpose =</span> <span class="st">&quot;Explore perspectives and experiences related to social media.&quot;</span>,</span>
+<span id="cb13-21"><a href="#cb13-21" tabindex="-1"></a>  <span class="at">agents =</span> agents,</span>
+<span id="cb13-22"><a href="#cb13-22" tabindex="-1"></a>  <span class="at">moderator_id =</span> <span class="st">&quot;MOD&quot;</span>,</span>
+<span id="cb13-23"><a href="#cb13-23" tabindex="-1"></a>  <span class="at">turn_taking_flow =</span> flow,</span>
+<span id="cb13-24"><a href="#cb13-24" tabindex="-1"></a>  <span class="at">admin_config =</span> config</span>
+<span id="cb13-25"><a href="#cb13-25" tabindex="-1"></a>)</span></code></pre></div>
 <p>Built-in flows are available only through
 <code>create_conversation_flow()</code>. <code>ConversationFlow</code>
 is the base class for custom turn-taking rules.</p>

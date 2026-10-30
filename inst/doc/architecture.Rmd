@@ -59,8 +59,10 @@ can generate model output.
 
 `focus_group_from_transcript()` creates a `FocusGroup` from an existing
 transcript without generating new turns. `moderator_id` identifies the
-moderator when known. If it is omitted, the importer falls back to finding
-`"mod"` within a speaker identifier.
+moderator when known. If it is omitted, a speaker named exactly `mod`,
+`moderator`, `facilitator`, or `interviewer` (in any case) is the moderator.
+When no speaker matches, the importer says so and analyzes every speaker as a
+participant.
 
 ## Offline execution and replay
 
@@ -82,24 +84,90 @@ recorded with the experiment so readers can see how it was run.
 `System` message. It then reads `question_script` in order. For each entry, the
 moderator generates one message. Question phases call
 `select_next_speaker()` and collect no more than
-`max_participant_responses` participant messages. Opening and closing phases
-do not collect participant responses.
+`max_participant_responses` participant messages, followed at a call-on point
+by the replies of the participants the moderator calls on. Opening and closing
+phases do not collect participant responses.
 
 The round-robin mode cycles through participants. The probabilistic mode
 samples from speaking propensities. The desire-based mode asks eligible
-participants for model-produced scores and selects among eligible candidates.
-Provider failures in desire scoring are recorded in the message metadata and
-trigger one message to the user. Selection then uses a neutral draw among the
-candidates; a failure is never recorded as a score of zero.
+participants for model-produced scores and selects among eligible candidates;
+it passes over the participant who spoke just before, and a moderator line in
+between ends that exclusion, so whoever closed one question may open the next.
+A score is read from the reply's final answer, never from reasoning the
+model returns with it. A desire score that cannot be obtained, after one retry
+with a larger budget, stops the session with an error of class
+`focusgroup_desire_failure`. With `on_desire_failure = "random"` the session
+continues instead: the speaker is chosen among the participants with valid
+scores by the same rule, or by a uniform draw when none has one, and the
+failure is recorded in the message metadata. A failure is never recorded as a
+score of zero.
+
+Two kinds of turn are given without the flow. When a moderator line puts its
+last question to one participant by handle ("P3, do you agree?", "Could you
+say more, P3?"), that participant takes the next turn. When the discussion of
+a call-on item ends (`call_on_silent`, by default the first, middle, and last
+question), the moderator calls on each participant who has not spoken since
+the previous such point, in roster order: a fixed line, delivered with no model
+call, then the participant's reply, with no desire score. Krueger (2002)
+describes the opening question of a focus group as a round robin; the first
+point gives every participant a turn during the first question. Both kinds of
+turn count as participant turns, for `max_participant_responses` (an
+addressed turn) and for `fg_before_turn()`, and the flow's state is updated
+after them as after its own picks. Round robin keeps its place in the
+rotation, and passes over the participant who has just spoken when the
+rotation comes to them, so that no one speaks twice in a row.
 
 The loop stops when the script is exhausted, `num_rounds` is reached, or the
-last closing entry is processed. It stores a final summary in `final_summary`.
+last closing entry is processed. It stores a final summary in `final_summary`,
+unless the session runs with `final_summary = FALSE`.
 The summary is not appended to `conversation_log`.
+
+The agents see each other under handles: participants as `P1`, `P2`, ... in
+roster order and the moderator as `Moderator` by default. Every prompt, the
+desire scores, probes, and the interim summary among them, is built from one
+view of the log in which each speaker appears under its handle, and each
+participant's system message names its own. The log keeps the agent IDs.
+
+Krueger, R. A. (2002). *Designing and Conducting Focus Group Interviews*.
+University of Minnesota.
 
 A `FocusGroup` object runs once. Calling `run_simulation()` on an object that
 has already run raises an error. Construct a new object for another full
-session. Use the continuation experiment in `run_focus_studio()` to compare a
-next message under original and edited histories.
+session. To continue a recorded session under other histories, pass it to
+`run_focus_group_arms()`, as described below; the continuation experiment in
+`run_focus_studio()` compares one next message.
+
+A message can also be placed into a running session: `fg_injection()`
+describes it and the point where it goes, after the moderator's line for a
+guide item (`fg_after_item()`), before a participant turn
+(`fg_before_turn()`), or before the closing line (`"before_closing"`). `run_focus_group_arms()` runs the session to that point
+once, copies the whole session there, and continues each copy to the end
+under its own arm, so the arms share every message before the injection.
+`fg_probe()` asks each participant a private question at stated points; the
+answers are saved apart from the transcript and never enter the discussion.
+With `scale = c(1, 7)`, each answer is also read as one whole number from 1 to
+7 into the `value` column of `probes`; an answer from which no single number
+on the scale can be read, such as "3 or 4" or "6/10", is re-asked once, and
+stays `NA`, with a warning, when the re-ask gives none either.
+
+An injection from a participant's ID or handle at `fg_before_turn(t)` is that
+participant's turn `t`, said as written with no model call. It is recorded
+with the routing rule `"injected"` and takes the place of the turn the session
+was about to give: the flow's pick, a turn the moderator's question addressed,
+or the reply to a call-on line.
+
+`run_focus_group_arms()` also continues a recorded session. Given a
+`focus_group_result` or a `FocusGroup` as its first argument, and arms that
+branch at `fg_before_turn(t)`, it reads the record into a new object, sets the
+engine to the state it was in just before turn `t` (the guide item and its
+stage, the turns given on it, the call-on queue, an addressed participant, the
+question and the interim summary in force, and the turn-taking rule's state),
+and runs each arm from there with the configuration supplied. The messages
+before turn `t` are the shared prefix. An arm that is `NULL` regenerates turn
+`t` and what follows; under round robin, with a model that answers the same
+messages the same way, it repeats the record. A human transcript read with
+`focus_group_from_transcript()` can be continued once its participants have
+personas; its later moderator lines are delivered as recorded.
 
 ## Messages and prompts
 
@@ -117,10 +185,12 @@ path.
 ## Stored data
 
 `conversation_log` is an ordered list of message records. Each record has a
-unique integer `message_id`, the moderator cycle in `round`, and `phase`.
-Moderator and participant messages responding to the same question share a
-round. Response identifiers, finish reasons, token counts, provider and model
-labels, duration, and failure metadata accompany generated messages.
+unique integer `message_id`, the moderator cycle in `round`, the guide item
+in `item`, `phase`, the agent ID in `speaker_id`, and the label the agents saw
+in `handle`. Moderator and participant messages responding to the same
+question share a round. A generated message also records what the provider returned about the
+call, such as its response identifier, finish reason, and token counts, with
+the provider and model that produced it.
 
 `run_focus_group()` exposes this log as the `transcript` data frame in its
 result. A `focus_group_result` always has these fields:
@@ -129,12 +199,35 @@ result. A `focus_group_result` always has these fields:
 - `transcript`: one row per logged message.
 - `summary`: the final model summary.
 - `participants`: a data frame describing the roster.
-- `usage`: token use in LLMR's `sent`, `rec`, and `total` vocabulary.
+- `usage`: token use in LLMR's `sent`, `rec`, and `total` vocabulary, with
+  `unknown`, the number of calls whose usage was incomplete. Unreported counts
+  are unknown rather than zero, so the totals are lower bounds when `unknown`
+  is positive; `unknown` is `NA` when that number cannot be determined, as
+  after a call that raised an error.
 - `metadata`: `topic`, `purpose`, `flow`, `message_mode`, `n_participants`,
-  `estimated_calls`, `provider`, and `model`, with no credentials.
+  `estimated_calls`, `provider`, `model`, `complete`, and `failure`, with no
+  credentials. `complete` is `FALSE` for a session that stopped early, and
+  `failure` then records the phase and the error message.
+
+When a model call fails during `run_simulation()`, `run_focus_group()` raises
+an error of class `focusgroup_incomplete_session`. Its `partial` field is a
+`focus_group_result` built from the messages logged before the failure, its
+`phase` field names the phase that was running, and its `parent` field holds
+the original error. A failed final summary is the exception: it produces a
+warning and a complete result whose `summary` is `NA`.
 
 The class has a concise print method. `FocusGroup` also has a concise S3 print
 method for direct R6 objects.
+
+`format(result)` writes the result as the lines of a session file, one JSON
+object per line, each one row of a table of the result:
+`writeLines(format(result), "session.fg.jsonl")`. The file holds no model
+configuration, key, endpoint, or runner, and `focus_group_from_transcript()`
+reads it back into a new `FocusGroup` with every setting and record, so that
+it can be analyzed, replayed with `fg_player()`, or continued. `saveRDS()` of
+a result, by contrast, keeps `focus_group`, with its configuration and runner.
+The file `system.file("fg-session-spec.md", package = "FocusGroup")` describes
+the format for converting a transcript by hand or with a language model.
 
 ## Analysis
 
@@ -154,7 +247,8 @@ analysis that encounters a provider failure raises the provider condition.
 
 To add a turn-taking rule, subclass `ConversationFlow` and implement
 `select_next_speaker()`. Override `update_state_post_selection()` when the rule
-keeps state. An extension can construct its class directly; built-in modes
+keeps state, and `note_moderator_turn()` when a moderator line should change
+it. An extension can construct its class directly; built-in modes
 remain available through `create_conversation_flow()`.
 
 See the function and class help pages for argument defaults and return values.

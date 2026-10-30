@@ -32,6 +32,28 @@
 #' never pasted into the app.
 #'
 #' @param ... Passed to \code{shiny::runApp()}.
+#' @details
+#' The Studio needs LLMR.shiny 0.1.3 or later and stops with an error when an
+#' older version is installed.
+#'
+#' The usage tile in the sidebar counts the model calls each action made and
+#' the tokens they reported, including the calls an action made before it
+#' failed. When some calls reported no usage, the token counts are shown as
+#' lower bounds. If usage cannot be recorded, a notification says so, and the
+#' action's results remain available.
+#'
+#' A run that fails partway keeps the turns it completed: the partial
+#' transcript can be analyzed and downloaded, and a notice names the phase in
+#' which the run stopped. A downloaded session keeps its completion status and
+#' the rows its participants were drawn from, but no model configuration or
+#' runner function, since a configuration can hold a literal API key.
+#'
+#' A continuation from a session saved by FocusGroup 0.5.2 or earlier rebuilds
+#' the saved `FGAgent` agents with the current class and their saved persona,
+#' style, and records, so that their prompts are unchanged and their usage is
+#' recorded as described in [run_focus_group()]; agents of other classes are
+#' used as saved.
+#'
 #' @return Invisibly, the value of \code{shiny::runApp()}; called for the side
 #'   effect of starting the app.
 #' @examples
@@ -55,7 +77,61 @@ run_focus_studio <- function(...) {
          paste(missing, collapse = ", "),
          ". Install them, then retry.", call. = FALSE)
   }
+  installed <- utils::packageVersion("LLMR.shiny")
+  if (installed < "0.1.3") {
+    stop("FocusGroup Studio requires LLMR.shiny >= 0.1.3; installed version is ",
+         as.character(installed), ". Run install.packages(\"LLMR.shiny\").", call. = FALSE)
+  }
   invisible(TRUE)
+}
+
+# Add one Studio action's recorded calls and tokens to the session usage tile.
+# Accounting never removes the action's results: the usage is recorded even
+# when reading it raised problems, and those problems, or a failure of the tile
+# update itself, are shown in one notification. `mark` receives TRUE when the
+# record is incomplete for either reason.
+.fg_account_action <- function(recorder, shared, mark,
+                               notify = function(message) shiny::showNotification(message, type = "warning")) {
+  usage <- recorder$value()
+  tokens <- list(calls = usage$calls, sent = usage$sent, received = usage$rec,
+                 total = usage$total, unknown = usage$unknown,
+                 sent_unknown = usage$sent_unknown,
+                 received_unknown = usage$rec_unknown)
+  problems <- unique(recorder$issues())
+  # An NA count records that completeness could not be determined, which the
+  # tile already shows. LLMR.shiny::usage_add() warns about each such count;
+  # those warnings are expected and are not repeated to the user.
+  expected <- sprintf("`tokens$%s` is NA",
+                      names(tokens)[vapply(tokens, function(x) length(x) == 1L && is.na(x), logical(1))])
+  recorded <- tryCatch({
+    withCallingHandlers(shared$add_usage(tokens), warning = function(w) {
+      text <- conditionMessage(w)
+      if (!any(startsWith(text, expected))) problems <<- c(problems, text)
+      invokeRestart("muffleWarning")
+    })
+    TRUE
+  }, error = function(e) {
+    problems <<- c(problems, conditionMessage(e))
+    FALSE
+  })
+  mark(length(problems) > 0L)
+  if (length(problems)) {
+    notice <- paste(
+      if (recorded) "Usage was recorded, but it may be incomplete." else
+        "Usage could not be recorded.",
+      "Generated results remain available.",
+      paste(unique(problems), collapse = "; "))
+    tryCatch(withCallingHandlers(notify(notice), warning = function(w) invokeRestart("muffleWarning")),
+             error = function(e) message(notice))
+  }
+  invisible(recorded && !length(problems))
+}
+
+.fg_partial_banner <- function(error) {
+  bslib::card(class = "border-warning",
+    bslib::card_header("Partial session"),
+    bslib::card_body(paste0("A partial result is available. The session stopped during phase '",
+      error$phase, "'. ", conditionMessage(error$parent %||% error))))
 }
 
 # ---- shell ------------------------------------------------------------------
@@ -117,6 +193,16 @@ run_focus_studio <- function(...) {
     speaker_id = vapply(idx, function(i) as.character(log[[i]]$speaker_id %||% ""), character(1)),
     text = vapply(idx, function(i) as.character(log[[i]]$text %||% ""), character(1)),
     stringsAsFactors = FALSE)
+}
+
+# The `message_id` of display row `j` in a cut history whose System row has
+# been dropped: the identifier .fg_perturb_log() matches on. When the log
+# lacks complete ids, .fg_perturb_log() indexes by position, and display row
+# j is position j of the cut history.
+.fg_display_message_id <- function(cut_log, j) {
+  ids <- vapply(cut_log, function(m) as.integer(m$message_id %||% NA_integer_),
+                integer(1))
+  if (anyNA(ids)) as.integer(j) else ids[[j]]
 }
 
 .fg_transcript_csv <- function(transcript) {
@@ -348,8 +434,8 @@ run_focus_studio <- function(...) {
 
 # ---- ANES persona helpers (for the Run tab's participant picker) ------------
 
-# The example personas frame, from LLMR (the shared home).
-.fg_personas <- function() LLMR::anes_2024_personas
+# The example personas frame shipped with the package.
+.fg_personas <- function() FocusGroup::anes_2024_personas
 
 # Restrict the fields rendered into a persona while retaining the data
 # dictionary and demographic classification used by create_agents_from_data().
@@ -508,26 +594,38 @@ run_focus_studio <- function(...) {
   }
   question_rounds <- sum(phases %in% response_phases)
   moderator_outputs <- length(script)
-  participant_outputs <- question_rounds *
-    as.integer(max_participant_responses)
+  participant_outputs <- as.double(question_rounds) *
+    as.double(max_participant_responses)
   desire_outputs <- if (identical(flow, "desire_based")) {
-    participant_outputs * as.integer(n_participants)
+    participant_outputs * as.double(n_participants)
   } else {
     0L
   }
+  # The Studio runs with the default call-ons: at each point, at most one
+  # call-on line, delivered as written, and one reply per participant.
+  call_on_points <- length(.fg_call_on_points(.fg_call_on_names, phases)$items)
+  call_on_turns <- as.double(call_on_points) * as.double(n_participants)
+  # While the number of participants is not set, the counts that depend on
+  # it are unknown, not zero.
+  known <- !anyNA(c(desire_outputs, call_on_turns))
   list(
-    calls = if (moderator_outputs) {
-      as.integer(
-        moderator_outputs + participant_outputs + desire_outputs + 1L
-      )
-    } else {
+    calls = if (!moderator_outputs) {
       0L
+    } else if (!known) {
+      NA_integer_
+    } else {
+      .fg_validate_estimate(
+        moderator_outputs + participant_outputs + desire_outputs +
+          call_on_turns + 1
+      )
     },
-    utterances = as.integer(moderator_outputs + participant_outputs),
+    utterances = as.integer(moderator_outputs + participant_outputs +
+                              2 * call_on_turns),
     moderator_turns = as.integer(moderator_outputs),
     question_rounds = as.integer(question_rounds),
     participant_outputs = as.integer(participant_outputs),
     desire_calls = as.integer(desire_outputs),
+    call_on_turns = as.integer(call_on_turns),
     phases = names(guide)
   )
 }
@@ -539,43 +637,26 @@ run_focus_studio <- function(...) {
                                    config, data = NULL, persona_cols = NULL,
                                    guide = NULL, .runner = NULL) {
   data <- data %||% .fg_personas()
-  data <- .fg_persona_columns(data, persona_cols)
-  chosen <- if (length(rows)) data[rows, , drop = FALSE] else data
-  n <- if (length(rows)) length(rows) else n_participants
+  rendered <- .fg_persona_columns(data, persona_cols)
+  n <- if (length(rows)) length(unique(rows)) else n_participants
   guide <- guide %||% .fg_gui_guide(topic)
+  plan <- .fg_gui_run_plan(guide, topic, n, flow, max_participant_responses)
 
   # focusgroup.seed must be in place BEFORE the agents are built: the diverse
   # draw inside create_agents_from_data() reads it. Setting it only around
-  # run_simulation() would leave the seed input inert on this path.
-  fg <- withr::with_options(
-    list(focusgroup.message_mode = message_mode, focusgroup.seed = seed),
-    {
-      agents <- create_agents_from_data(chosen, n_participants = n,
-                                        config = config, .runner = .runner)
-      flow_obj <- create_conversation_flow(flow, agents, "MOD")
-      script <- .fg_build_question_script(guide, topic)
-      fg <- FocusGroup$new(topic = topic,
-                           purpose = paste("Explore perspectives on", topic),
-                           agents = agents, moderator_id = "MOD",
-                           turn_taking_flow = flow_obj, question_script = script,
-                           max_participant_responses = max_participant_responses)
-      fg$run_simulation(verbose = FALSE)
-      fg
-    })
-  plan <- .fg_gui_run_plan(
-    guide,
-    topic,
-    n_participants = n,
-    flow = flow,
-    max_participant_responses = max_participant_responses
-  )
-  .fg_focus_group_result(
-    focus_group = fg,
-    flow = flow,
-    message_mode = message_mode,
-    n_participants = n,
-    estimated_calls = plan$calls
-  )
+  # run_simulation() would leave the seed input inert on this path. The rows
+  # are selected inside create_agents_from_data() so that the roster records
+  # their positions in the persona table.
+  withr::local_options(list(focusgroup.message_mode = message_mode, focusgroup.seed = seed))
+  agents <- create_agents_from_data(rendered, n_participants = n,
+    rows = if (length(rows)) rows else NULL, config = config, .runner = .runner)
+  agents <- .fg_roster_provenance(agents, data, attr(agents, "source_rows"))
+  fg <- FocusGroup$new(topic = topic, purpose = paste("Explore perspectives on", topic),
+    agents = agents, moderator_id = "MOD",
+    turn_taking_flow = create_conversation_flow(flow, agents, "MOD"),
+    question_script = .fg_build_question_script(guide, topic),
+    max_participant_responses = max_participant_responses)
+  .fg_execute_session(fg, flow, message_mode, n, plan$calls)
 }
 
 # ---- run module (live: run a fresh focus group) -----------------------------
@@ -595,6 +676,7 @@ run_focus_studio <- function(...) {
     ns <- session$ns
     result <- shiny::reactiveVal(NULL)
     err <- shiny::reactiveVal(NULL)
+    accounting_incomplete <- shiny::reactiveVal(FALSE)
     pending_run <- shiny::reactiveVal(NULL)
     warn_card <- function(m) bslib::card(class = "border-warning", bslib::card_body(m))
     warn_user <- function(message, ui = warn_card(message)) {
@@ -817,12 +899,12 @@ run_focus_studio <- function(...) {
                 shiny::tagList(
                   "Participants drawn from ",
                   LLMR.shiny::help_tip(
-                    "Synthetic creates generated profiles; ANES uses selected or sampled survey respondents."
+                    "Use demographic fields alone, or select respondent fields to include in each persona."
                   )
                 ),
                 choices = c(
-                  "Synthetic personas" = "synthetic",
-                  "ANES 2024 personas" = "anes"
+                  "ANES demographics" = "synthetic",
+                  "ANES respondent fields" = "anes"
                 ),
                 selected = "synthetic",
                 inline = TRUE
@@ -834,7 +916,7 @@ run_focus_studio <- function(...) {
                   paste(
                     "Pick rows to use as participants. The list runs from",
                     "most liberal at the top to most conservative at the",
-                    "bottom. Select none to draw a diverse sample",
+                    "bottom. Select none to sample from the available records",
                     "automatically."
                   )
                 ),
@@ -1024,7 +1106,9 @@ run_focus_studio <- function(...) {
           "before each response."
         ) else ""
       plan <- estimate_run()
-      scale <- if (identical(shared$mode(), "demo")) {
+      scale <- if (is.na(plan$calls)) {
+        "Set the number of participants to see the planned API calls."
+      } else if (identical(shared$mode(), "demo")) {
         sprintf(
           "In Live mode, this configuration would make %d API calls and produce up to %d transcript utterances.",
           plan$calls, plan$utterances
@@ -1047,6 +1131,11 @@ run_focus_studio <- function(...) {
               plan$moderator_turns,
               length(plan$phases)
             ),
+            if (!is.na(plan$call_on_turns) && plan$call_on_turns > 0L) sprintf(
+              paste("The plan counts up to %d replies from participants the",
+                    "moderator calls on because they have not spoken."),
+              plan$call_on_turns
+            ),
             "Retries and incomplete-utterance continuations are excluded and can add calls.",
             sprintf(
               "Live runs above %d planned calls require confirmation.",
@@ -1061,7 +1150,7 @@ run_focus_studio <- function(...) {
     shiny::observe({
       if (!identical(shared$active_tab(), "run")) return()
       plan <- estimate_run()
-      if (identical(shared$mode(), "live")) {
+      if (identical(shared$mode(), "live") && !is.na(plan$calls)) {
         shared$set_plan(plan$calls, plan_label(plan))
       } else {
         shared$set_plan(0L)
@@ -1145,11 +1234,13 @@ run_focus_studio <- function(...) {
 
     execute_run <- function(request) {
       planned <- request$plan$calls
+      recorder <- .fg_usage_recorder(LLMR.shiny::build_runner("live"), safe = TRUE)
+      on.exit(.fg_account_action(recorder, shared, accounting_incomplete), add = TRUE)
       completed <- 0L
       run_output <- shiny::withProgress(
         message = "Running Focus Group", value = 0,
         {
-          live_runner <- LLMR.shiny::build_runner("live")
+          live_runner <- recorder$runner
           progress_runner <- function(experiments, ...) {
             rows <- lapply(seq_len(NROW(experiments)), function(i) {
               out <- live_runner(experiments[i, , drop = FALSE], ...)
@@ -1160,12 +1251,12 @@ run_focus_studio <- function(...) {
               ) / planned
               detail <- if (completed <= planned) {
                 sprintf(
-                  "Completed %d of %d planned API calls",
+                  "Completed %d of an estimated %d API calls",
                   completed, planned
                 )
               } else {
                 sprintf(
-                  "Completed %d API calls; %d were planned",
+                  "Completed %d API calls; %d were estimated",
                   completed, planned
                 )
               }
@@ -1215,7 +1306,7 @@ run_focus_studio <- function(...) {
               (planned - completed) / planned,
               detail = if (completed > 0L) {
                 sprintf(
-                  "Run complete after %d API calls; %d were planned",
+                  "Run complete after %d API calls; %d were estimated",
                   completed, planned
                 )
               } else {
@@ -1225,24 +1316,25 @@ run_focus_studio <- function(...) {
           }
           list(
             result = res,
-            completed = if (completed > 0L) completed else planned
+            completed = completed
           )
         }
       )
 
       res <- run_output$result
       if (!res$ok) {
-        err(res$ui)
-        return()
+        if (inherits(res$error, "focusgroup_incomplete_session")) {
+          res$value <- res$error$partial
+          err(.fg_partial_banner(res$error))
+        } else {
+          err(res$ui)
+          return()
+        }
       }
       result(res$value)
       if (is.function(shared$finished_session)) {
         shared$finished_session(res$value)
       }
-      usage <- res$value$usage %||% list()
-      shared$add_usage(list(calls = run_output$completed,
-                            sent = usage$sent %||% 0L,
-                            received = usage$rec %||% 0L))
     }
 
     shiny::observeEvent(input$run, {
@@ -1419,8 +1511,10 @@ run_focus_studio <- function(...) {
       shiny::req(result())
       usage <- result()$usage
       cat("Transcript utterances:", nrow(result()$transcript), "\n")
-      cat("Sent tokens:", usage$sent %||% NA, "\n")
-      cat("Received tokens:", usage$rec %||% NA, "\n")
+      cat("Sent tokens:", .fg_usage_text(usage$sent, usage$unknown), "\n")
+      cat("Received tokens:", .fg_usage_text(usage$rec, usage$unknown), "\n")
+      cat("Total tokens:", .fg_usage_text(usage$total, usage$unknown), "\n")
+      cat(.fg_usage_note(usage$unknown))
     })
 
     output$timing_table <- DT::renderDT({
@@ -1480,6 +1574,21 @@ run_focus_studio <- function(...) {
                               conversation_log = NULL, config = NULL,
                               .runner = NULL) {
   a <- if (inherits(agent, "R6")) agent$clone(deep = TRUE) else agent
+  # An FGAgent saved by an earlier version carries that version's methods,
+  # which record usage without its completeness. Rebuild it with the current
+  # class and copy its persona fields as saved, so the prompt is unchanged; a
+  # subclass is used as saved.
+  if (identical(class(agent), c("FGAgent", "R6")) &&
+      !"tokens_total_agent" %in% names(agent)) {
+    a <- FGAgent$new(agent$id,
+      list(direct_persona_description = agent$persona_description),
+      config = config %||% agent$config, is_moderator = isTRUE(agent$is_moderator),
+      .runner = .runner %||% agent$.runner)
+    for (field in c("persona_description", "communication_style_instruction",
+                    "role", "demographics", "survey_responses", "history")) {
+      if (field %in% names(agent)) a[[field]] <- agent[[field]]
+    }
+  }
   if (!is.null(config)) a$config <- config
   if (!is.null(.runner)) a$.runner <- .runner
   a$generate_utterance(
@@ -1562,7 +1671,12 @@ run_focus_studio <- function(...) {
 
   rows <- vector("list", length(histories) * runs_per_arm)
   out_index <- 0L
+  claim <- if (inherits(fg, "FocusGroup")) fg$.__enclos_env__$private$claim_handles
+  if (is.function(claim)) claim()
   for (history in histories) {
+    # The agent reads the cut log as it read the session: speakers under
+    # their handles.
+    history$log <- .fg_agent_log(fg, history$log)
     history_string <- .fg_history_string(history$log)
     for (run_id in seq_len(runs_per_arm)) {
       response <- .fg_generate_once(
@@ -1588,9 +1702,9 @@ run_focus_studio <- function(...) {
         is_control = history$is_control,
         run_id = as.integer(run_id),
         response_text = .fg_utterance_text(response),
-        sent_tokens = as.integer(meta$sent_tokens %||% 0L),
-        rec_tokens = as.integer(meta$rec_tokens %||% 0L),
-        total_tokens = as.integer(meta$total_tokens %||% 0L),
+        sent_tokens = meta$sent_tokens %||% NA_integer_,
+        rec_tokens = meta$rec_tokens %||% NA_integer_,
+        total_tokens = meta$total_tokens %||% NA_integer_,
         duration_s = as.numeric(meta$duration_s %||% NA_real_),
         stringsAsFactors = FALSE
       )
@@ -1650,8 +1764,7 @@ run_focus_studio <- function(...) {
 }
 
 .fg_experiment_summary <- function(responses) {
-  words <- lengths(strsplit(trimws(responses$response_text), "\\s+"))
-  words[!nzchar(trimws(responses$response_text))] <- 0L
+  words <- .fg_word_count(responses$response_text)
   ids <- unique(responses$arm_id)
   do.call(rbind, lapply(ids, function(id) {
     keep <- responses$arm_id == id
@@ -1670,10 +1783,7 @@ run_focus_studio <- function(...) {
 
 .fg_experiment_plot <- function(responses) {
   plot_data <- responses
-  plot_data$words <- lengths(strsplit(
-    trimws(plot_data$response_text), "\\s+"
-  ))
-  plot_data$words[!nzchar(trimws(plot_data$response_text))] <- 0L
+  plot_data$words <- .fg_word_count(plot_data$response_text)
   ggplot2::ggplot(
     plot_data,
     ggplot2::aes(x = .data$arm_label, y = .data$words)
@@ -1726,11 +1836,37 @@ run_focus_studio <- function(...) {
     stringsAsFactors = FALSE)
 }
 
+# Read an uploaded transcript CSV with every value kept as written. Type
+# inference would turn the speaker ids 001 and 01 into the same number 1,
+# round long numeric ids, and make the text "NA" missing. The columns other
+# than the speaker, the text, and response ids are given their usual types
+# once the user has mapped the columns; see .fg_convert_upload_columns().
+.fg_read_transcript_csv <- function(file) {
+  out <- LLMR.shiny::read_csv_upload(file, col_classes = "character",
+                                     na_strings = character(0))
+  attr(out, "focusgroup_csv_upload") <- TRUE
+  out
+}
+
+# Give the columns of an uploaded transcript other than `keep` (the mapped
+# speaker and text columns) and `response_id` the types utils::read.csv()
+# would have inferred, with "NA" read as missing. Other data frames are
+# returned unchanged.
+.fg_convert_upload_columns <- function(df, keep) {
+  if (!isTRUE(attr(df, "focusgroup_csv_upload"))) return(df)
+  attr(df, "focusgroup_csv_upload") <- NULL
+  for (j in which(!names(df) %in% c(keep, "response_id"))) {
+    df[[j]] <- utils::type.convert(df[[j]], as.is = TRUE, na.strings = "NA")
+  }
+  df
+}
+
 .fg_prepare_analysis_source <- function(obj, speaker_col = NULL,
                                         text_col = NULL) {
   if (inherits(obj, "focus_group_result")) {
+    # A result saved without its session object is rebuilt from its tables.
     return(list(
-      focus_group = obj$focus_group,
+      focus_group = obj$focus_group %||% .fg_rebuilt_for_analysis(obj),
       transcript = obj$transcript
     ))
   }
@@ -1747,32 +1883,14 @@ run_focus_studio <- function(...) {
     )
   }
 
-  fg <- focus_group_from_transcript(
-    obj,
-    speaker_col = speaker_col,
-    text_col = text_col
-  )
-  # Retain exported transcript metadata when row alignment is unchanged.
-  if (length(fg$conversation_log) == nrow(obj)) {
-    fields <- intersect(
-      c(
-        "message_id", "round", "is_moderator", "phase", "response_id",
-        "finish_reason", "sent_tokens", "rec_tokens", "total_tokens",
-        "duration_s", "provider", "model", "timestamp"
-      ),
-      names(obj)
-    )
-    for (i in seq_len(nrow(obj))) {
-      for (field in fields) {
-        value <- obj[[field]][[i]]
-        if (identical(field, "timestamp")) {
-          value <- suppressWarnings(as.POSIXct(as.character(value)))
-        }
-        fg$conversation_log[[i]][[field]] <- value
-      }
-    }
-  }
-  list(focus_group = fg, transcript = obj)
+  # focus_group_from_transcript() keeps the fields an exported transcript
+  # carries, so the table shown is the imported log itself, one row per kept
+  # turn, rather than the uploaded rows.
+  defaults <- .fg_analysis_column_defaults(obj)
+  fg <- focus_group_from_transcript(obj,
+    speaker_col = speaker_col %||% defaults$speaker,
+    text_col = text_col %||% defaults$text)
+  list(focus_group = fg, transcript = .fg_transcript_data(fg$conversation_log))
 }
 
 .fg_missing_analysis_packages <- function(include_plots = TRUE) {
@@ -1953,6 +2071,7 @@ run_focus_studio <- function(...) {
     ))
     source_label <- shiny::reactiveVal("No transcript loaded")
     err <- shiny::reactiveVal(NULL)
+    accounting_incomplete <- shiny::reactiveVal(FALSE)
     warn_card <- function(message) {
       bslib::card(class = "border-warning", bslib::card_body(message))
     }
@@ -1986,12 +2105,15 @@ run_focus_studio <- function(...) {
           return(list(disabled = FALSE, reason = NULL))
         }
         if (inherits(value, "focus_group_result")) {
-          if (!inherits(value$focus_group, "FocusGroup") ||
+          # A result without its session object is read from its tables.
+          saved_alone <- is.null(value$focus_group) && is.data.frame(value$transcript) &&
+            nrow(value$transcript) > 0L
+          if (!saved_alone && (!inherits(value$focus_group, "FocusGroup") ||
               !length(value$focus_group$conversation_log) ||
-              !is.data.frame(value$transcript)) {
+              !is.data.frame(value$transcript))) {
             return(list(
               disabled = TRUE,
-              reason = "The saved focus-group result is incomplete."
+              reason = "The saved focus-group result lacks a session object or transcript table."
             ))
           }
           return(list(disabled = FALSE, reason = NULL))
@@ -2189,7 +2311,7 @@ run_focus_studio <- function(...) {
       reset_analysis()
       obj <- tryCatch(
         if (grepl("\\.rds$", input$file$name, ignore.case = TRUE)) readRDS(input$file$datapath)
-        else LLMR.shiny::read_csv_upload(input$file),
+        else .fg_read_transcript_csv(input$file),
         error = function(e) {
           warn_user(conditionMessage(e))
           NULL
@@ -2258,13 +2380,17 @@ run_focus_studio <- function(...) {
         defaults <- .fg_analysis_column_defaults(obj)
         speaker_col <- speaker_col %||% defaults$speaker
         text_col <- text_col %||% defaults$text
+        obj <- .fg_convert_upload_columns(obj, c(speaker_col, text_col))
       }
       prepared <- tryCatch(
-        .fg_prepare_analysis_source(
+        withCallingHandlers(.fg_prepare_analysis_source(
           obj,
           speaker_col = speaker_col,
           text_col = text_col
-        ),
+        ), warning = function(w) {
+          warn_user(conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }),
         error = function(e) {
           warn_user(conditionMessage(e))
           NULL
@@ -2290,7 +2416,7 @@ run_focus_studio <- function(...) {
       analysis_settings(list(
         num_topics = input$num_topics %||% 5L,
         include_plots = isTRUE(input$include_plots),
-        text_col = text_col
+        text_col = "text"
       ))
     })
 
@@ -2334,6 +2460,8 @@ run_focus_studio <- function(...) {
         2L,
         "Thematic analysis and model summary; retries excluded"
       )
+      recorder <- .fg_usage_recorder(LLMR.shiny::build_runner("live"), safe = TRUE)
+      on.exit(.fg_account_action(recorder, shared, accounting_incomplete), add = TRUE)
       result <- shiny::withProgress(
         message = "Running Model Analysis",
         value = 0,
@@ -2345,7 +2473,7 @@ run_focus_studio <- function(...) {
               num_topics = input$num_topics %||% 5L,
               include_plots = isTRUE(input$include_plots),
               config = config_result$value,
-              .runner = LLMR.shiny::build_runner("live")
+              .runner = recorder$runner
             ),
             provider
           )
@@ -2364,7 +2492,6 @@ run_focus_studio <- function(...) {
         include_plots = isTRUE(input$include_plots),
         text_col = current_settings$text_col
       ))
-      shared$add_usage(list(calls = 2L, sent = 0L, received = 0L))
     })
 
     shiny::observe({
@@ -2736,6 +2863,7 @@ run_focus_studio <- function(...) {
     result <- shiny::reactiveVal(NULL)
     pending_run <- shiny::reactiveVal(NULL)
     err <- shiny::reactiveVal(NULL)
+    accounting_incomplete <- shiny::reactiveVal(FALSE)
     warn_card <- function(message) {
       bslib::card(class = "border-warning", bslib::card_body(message))
     }
@@ -3199,6 +3327,9 @@ run_focus_studio <- function(...) {
       }
       log_idx <- dt$log_index[seq_len(k)]
       log_k <- g$conversation_log[log_idx]
+      # The controls number display rows, which skip the System row; the
+      # experiment edits by message_id, so translate the previewed row.
+      perturb_id <- .fg_display_message_id(log_k, j)
       provider <- shared$provider()
       config_result <- LLMR.shiny::safe_llmr_call(
         LLMR.shiny::build_llm_config(
@@ -3227,7 +3358,7 @@ run_focus_studio <- function(...) {
         focus_group = g,
         log = log_k,
         speaker = speaker,
-        perturb_message_id = j,
+        perturb_message_id = perturb_id,
         arms = arms,
         runs = runs,
         question = input$question %||% "N/A",
@@ -3238,6 +3369,8 @@ run_focus_studio <- function(...) {
     }
 
     execute_run <- function(request) {
+      recorder <- .fg_usage_recorder(LLMR.shiny::build_runner("live"), safe = TRUE)
+      on.exit(.fg_account_action(recorder, shared, accounting_incomplete), add = TRUE)
       completed <- 0L
       res <- shiny::withProgress(
         message = "Running Continuation Experiment", value = 0,
@@ -3264,7 +3397,7 @@ run_focus_studio <- function(...) {
               runs_per_arm = request$runs,
               question = request$question,
               config = request$config,
-              .runner = LLMR.shiny::build_runner("live"),
+              .runner = recorder$runner,
               .progress = progress
             ),
             request$provider
@@ -3273,11 +3406,6 @@ run_focus_studio <- function(...) {
       )
       if (!res$ok) { err(res$ui); return() }
       result(res$value)
-      shared$add_usage(list(
-        calls = request$calls,
-        sent = sum(res$value$sent_tokens %||% 0L, na.rm = TRUE),
-        received = sum(res$value$rec_tokens %||% 0L, na.rm = TRUE)
-      ))
     }
 
     shiny::observeEvent(input$run, {

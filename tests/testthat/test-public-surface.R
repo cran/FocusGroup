@@ -8,10 +8,20 @@ test_that("the package exports exactly the first-release surface", {
     "create_agents_from_data",
     "create_agents_from_survey",
     "create_conversation_flow",
+    "fg_after_item",
+    "fg_before_turn",
+    "fg_default_na_strings",
+    "fg_injection",
+    "fg_player",
+    "fg_probe",
+    "fg_turns",
     "focus_group_from_transcript",
     "get_default_prompt_templates",
+    "persona_rendering_report",
     "run_focus_group",
-    "run_focus_studio"
+    "run_focus_group_arms",
+    "run_focus_studio",
+    "summarize_focus_group"
   )
   expect_identical(sort(getNamespaceExports("FocusGroup")), sort(expected))
 })
@@ -22,7 +32,10 @@ test_that("public call signatures use the family grammar", {
     run_args,
     c("topic", "config", "n_participants", "guide", "demographics",
       "survey_responses", "flow", "seed", "message_mode", "verbose",
-      "max_participant_responses", "max_calls", "confirm", ".runner")
+      "max_participant_responses", "max_calls", "confirm",
+      "max_tokens_config", "reasoning_effort", "on_desire_failure",
+      "injections", "probes", "moderator_verbatim", "call_on_silent",
+      "call_on_text", "handles", "final_summary", ".runner")
   )
 
   analysis_args <- names(formals(analyze_focus_group))
@@ -144,6 +157,8 @@ test_that("default prompt names are all supported contracts", {
     "participant_utterance_subtle_persona",
     "participant_turn_instruction",
     "participant_desire_instruction",
+    "participant_probe_instruction",
+    "participant_probe_reask",
     "participant_desire_to_talk_nuanced",
     "moderator_opening",
     "moderator_icebreaker_question",
@@ -156,6 +171,13 @@ test_that("default prompt names are all supported contracts", {
     "moderator_ending_question",
     "moderator_closing",
     "moderator_generic_utterance",
-    "thematic_analysis_prompt"
+    "thematic_analysis_prompt",
+    "summary_participant",
+    "summary_item",
+    "summary_disagreements",
+    "summary_trajectory",
+    "summary_turn",
+    "summary_session",
+    "summary_reask"
   ), ignore.order = FALSE)
 })

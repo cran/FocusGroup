@@ -123,13 +123,32 @@ calls.
 
 | Mode | Speaker selection | Research use and cost |
 |---|---|---|
-| `"round_robin"` | It cycles through participant IDs in a fixed order. | Use it when equal speaking opportunity and predictable exposure are design requirements. It adds no speaker-selection model calls. |
+| `"round_robin"` | It cycles through participant IDs in a fixed order, passing over a participant who has just spoken in a turn the moderator gave. | Use it when equal speaking opportunity and predictable exposure are design requirements. It adds no speaker-selection model calls. |
 | `"probabilistic"` | It samples from speaking propensities. The selected participant's propensity falls to zero, while the other propensities recover toward their baselines by `recovery_increment`, which defaults to `0.1`. | Use it when unequal, stochastic participation is part of the design but speaker choice should not depend on model-rated content. |
-| `"desire_based"` | It asks eligible personas to rate their desire to speak from the current question and transcript. It excludes the previous speaker when possible, uses `min_desire_threshold = 3`, may relax the threshold after discussion begins, selects the highest score, breaks ties at random, and falls back to uniform selection after scoring failures. | Use it when content-responsive speaker emergence is the object of study. It adds model calls and makes speaker assignment model-dependent. |
+| `"desire_based"` | It asks eligible personas to rate their desire to speak from the current question and transcript. It passes over the participant who spoke just before, unless the moderator has spoken since, uses `min_desire_threshold = 3`, may relax the threshold after discussion begins, selects the highest score, and breaks ties at random. A score that cannot be obtained stops the session, unless `on_desire_failure = "random"`, which chooses among the valid scores. | Use it when content-responsive speaker emergence is the object of study. It adds model calls and makes speaker assignment model-dependent. |
 
 `"desire_based"` is the default. Nondefault propensity, recovery, or desire
 settings require `create_conversation_flow()` and direct construction, described
 in the advanced section below.
+
+Two kinds of turn bypass the flow. First, the moderator calls on participants
+who have not spoken. At the first, middle, and last questions participants
+answer (`call_on_silent = c("opening", "midpoint", "end")`, items 2, 4, and 7
+of the default guide), once the discussion of the question ends, the moderator
+turns to each participant who has said nothing since the previous such point
+and asks, in a fixed line, "P4, I'd like to hear from you as well. What are
+your thoughts?" The line is delivered as written, with no model call, and the
+participant answers without a desire score. The first point gives every
+participant a turn during the first question, as the round-robin opening
+question of Krueger (2002) does. Item numbers place the points elsewhere,
+`call_on_text` supplies other wording, and `call_on_silent = "none"` turns
+call-ons off. Second, when the moderator's line puts its last question to one
+participant by name, as in "Could you say more, P3?", that participant answers
+next. The routing record marks these turns `"called_on"` and `"addressed"` and
+names the moderator line that gave the floor.
+
+Krueger, R. A. (2002). *Designing and Conducting Focus Group Interviews*.
+University of Minnesota.
 
 ## Build participants from personas and respondent data
 
@@ -153,8 +172,10 @@ direct_agents <- create_agents(
 
 `create_agents_from_data()` accepts respondent rows already in memory.
 Demographic columns are rendered as background and the remaining columns as
-survey responses. Values are used as supplied, so coded values should be
-decoded before this call.
+survey responses. Columns with value labels, as `haven` reads them, are
+rendered by the rules of `create_agents_from_survey()` described below. Text
+and factor values are shown as given, except missing-data labels such as
+"-9. Refused" or "Don't know", which are left out.
 
 ```r
 respondents <- data.frame(
@@ -172,13 +193,20 @@ record_agents <- create_agents_from_data(
 )
 ```
 
-A data frame with `persona` and `persona_id` columns is treated as a
-pre-rendered persona panel. This includes `LLMR::anes_2024_personas`:
+A data frame with `persona` and `persona_id` columns, such as a
+`silicon_panel` from LLMRpanel, is treated as a pre-rendered persona panel,
+and its `persona` text is used as given.
+
+The package ships `anes_2024_personas`, profiles of 100 respondents to the
+American National Election Studies 2024 Time Series Study, with the question
+behind each column in its `dictionary` attribute. `create_agents()` draws its
+participants from it when no records are supplied, and
+`create_agents_from_data()` accepts any subset of its rows and columns; a
+subset taken with `[` or `subset()`, which drop the `dictionary`, has it
+restored from the package's copy:
 
 ```r
-data(anes_2024_personas, package = "LLMR")
-
-panel_agents <- create_agents_from_data(
+anes_agents <- create_agents_from_data(
   anes_2024_personas,
   n_participants = 6,
   config = config
@@ -186,8 +214,15 @@ panel_agents <- create_agents_from_data(
 ```
 
 `create_agents_from_survey()` reads Stata, SPSS, and SAS files through `haven`.
-It decodes selected values from their value labels and uses variable labels as
-question text unless names supplied by the caller replace them.
+It renders each answer from the file's value labels. A number the file leaves
+unlabeled is shown on its scale when the item labels only the endpoints ("On a
+scale of 1 to 7, where 1 is ... and 7 is ..., you place yourself at 5"), and
+as a number in a numeric field such as age; `scale_template` rewords that
+sentence, for instance for a placement of a candidate rather than oneself.
+Questions are shown in the wording given in `question_wording`, else under the
+variable labels, with a warning. `value_labels` replaces labels the file cut
+short and labels stray codes. Labels that mark an answer as missing, matched
+by `fg_default_na_strings()`, are left out.
 
 ```r
 survey_agents <- create_agents_from_survey(
@@ -195,9 +230,17 @@ survey_agents <- create_agents_from_survey(
   survey_path = "respondents.dta",
   config = config,
   demographic_vars = c(age = "AGE", education = "EDUC"),
-  survey_vars = c("Remote-work preference" = "Q12")
+  survey_vars = c("Q12", "Q13"),
+  question_wording = c(Q12 = "Would you prefer to work from home?",
+                       Q13 = "How long is your commute?")
 )
+persona_rendering_report(survey_agents)
 ```
+
+`persona_rendering_report()` lists, for each participant, every requested field
+and item with the text its persona shows, or the reason it was left out.
+Answers shown in a form that needs checking, such as a code without a label,
+are marked and named in a warning.
 
 When direct persona text is absent, the constructors render the supplied
 demographic fields and survey responses. They do not infer dispositions from
@@ -210,7 +253,11 @@ constructors above are used with direct `FocusGroup` construction.
 `focus_group_from_transcript()` imports a simulated or observed transcript for
 analysis. Importing and descriptive analysis make no model call. Pass
 `moderator_id` when the moderator is known. If it is omitted, the importer
-looks for `"mod"` within speaker identifiers.
+treats a speaker named exactly `mod`, `moderator`, `facilitator`, or
+`interviewer` (in any case) as the moderator; an identifier such as
+`"Moderator 1"` needs `moderator_id`. A transcript saved from a session, such
+as `result$transcript` written to a CSV file, keeps its message ids, rounds,
+phases, and token counts when it is imported again.
 
 ```r
 transcript <- data.frame(
@@ -253,36 +300,191 @@ install.packages(c(
 FocusGroup does not export specialized report constructors. `LLMR::report()`
 is the ecosystem reporting entry point.
 
+## Summarize a discussion
+
+`summarize_focus_group()` asks a model to summarize a session, a set of arms,
+or an imported transcript by participant, guide item, disagreement,
+trajectory, turn, or the whole session. The lengths `"headline"`, `"brief"`,
+and `"detailed"` that you request come back from one call per unit, so they
+agree with each other.
+
+```r
+summaries <- summarize_focus_group(
+  result, config,
+  by = "participant",
+  compression = c("headline", "brief")
+)
+summaries$summaries  # one row per unit and length
+summaries$claims     # each claim kept, with its status and evidence
+summaries$quotes     # each quote, cut from the message it cites
+```
+
+The model returns claims as JSON, not prose. Each claim has a status
+(`"stated"`, `"implied"`, `"contradictory"`, or `"not_stated"`), the messages
+it rests on, and any words it quotes, and each is checked in code before
+prose is rendered from it. A cited message must exist and lie within the
+unit, and its speaker must be the one the claim names. A quote must appear in
+the cited message, allowing only for differences of case, whitespace, and
+quotation marks. A claim for the whole group must cite every participant who
+spoke on the item, and a silent participant can only be reported as silent.
+A reply that fails is sent back once with each failure stated. A second
+failure stops with an error of class `focusgroup_summary_check_failure` that
+carries the units already completed; `on_fail = "drop"` sets the failing
+claims aside instead, unless they report a disagreement, a position held
+alone, or a change.
+
+The summarizing model labels each speaker by a handle, never a user ID: the
+speakers of an imported transcript are labeled P1, P2, and so on. Names inside
+the messages reach it as written, as the speakers said them, and a claim that
+names a speaker must cite a message by that speaker. It never sees personas or
+the System row, and it sees private probe answers only with
+`include_probes = TRUE`. Calls are recorded in the summary's `calls` table,
+apart from the session's records, and an estimate above `max_calls` stops the
+run before any call unless `confirm = TRUE`. `fg_turns()` returns the turn
+table the summaries read, with no model call.
+
+## Replay a session in the browser
+
+`fg_player()` writes a finished session to one HTML file that replays it
+step by step, for showing a session in a talk or checking a run by eye. The
+page opens with the design of the session and each participant's persona as
+sent, then shows the messages in order. Under desire-based selection, a
+panel before each turn gives the desire score of every participant asked and
+names the one who took the floor, and under probabilistic selection it gives
+each participant's chance in the draw. A turn that the moderator gave by
+calling on or addressing a participant is marked as such, private answers
+appear where they were asked, and injected comments carry their source. The
+page is built from the session's records and calls no model. Its styles,
+script, and data are inline, so it opens from disk without a network
+connection.
+
+```r
+fg_player(result)
+fg_player(result, file = "session.html", mode = "static", open = FALSE)
+```
+
+The right arrow, the space bar, or a presentation clicker moves forward and
+the left arrow moves back; S shows or hides the selection panels, and F
+fills the screen. `mode = "static"` shows every step at once, for printing
+and archives. For the result of `run_focus_group_arms()`, the function writes
+one file per arm, each holding the shared messages and that arm's
+continuation. The package includes a synthetic session, made with a scripted
+runner, on which the page can be tried without a provider key:
+
+```r
+session <- readRDS(system.file("extdata", "player-session.rds",
+                               package = "FocusGroup"))
+fg_player(session)
+```
+
+![A step of the replayed bundled session: at the end of the first question
+the moderator calls on P2 and then P4, who had not spoken; each call-on line
+is followed by a panel saying that the participant was called on by name and
+no desire scores were asked, and then by that participant's
+reply.](man/figures/player.png)
+
+## Save a session and continue it
+
+`format()` writes a finished session as a session file: one JSON object per
+line, one row of the record each, with no configuration, key, or runner.
+`focus_group_from_transcript()` reads such a file back into a new session,
+and `run_focus_group_arms()` continues a recorded session from a participant
+turn, once per arm. An injection from a participant at `fg_before_turn(t)` is
+that participant's turn t, so a counterfactual such as "what if P2 had said
+this instead" is one arm, and a `NULL` arm lets the models speak again from
+the same point.
+
+```r
+writeLines(format(result), "library.fg.jsonl")
+fg <- focus_group_from_transcript("library.fg.jsonl")
+arms <- run_focus_group_arms(
+  fg, config,
+  arms = list(
+    as_recorded = NULL,
+    objection = fg_injection("Longer hours would cost two weekday programs.",
+                             at = fg_before_turn(2), from = "P2")),
+  seed = 110)
+fg_player(arms)
+```
+
+Every arm starts from the record's state just before turn t: the messages,
+the guide item, the turns already taken, the turn-taking rule's state, and
+the interim summary then in force. The file format is described for
+language models in `system.file("fg-session-spec.md", package =
+"FocusGroup")`, so a model can turn a raw transcript into a file the reader
+accepts; the reader reports every problem it finds at once. A human
+transcript continued this way is a model's continuation of a human
+discussion, not what those people would have said.
+
 ## Use Focus Studio
 
 `run_focus_studio()` starts the optional Shiny interface. Its Run tab starts
-sessions with synthetic or ANES 2024 personas. Synthetic-persona sessions use
-`run_focus_group()`; ANES sessions use respondent-derived agents with the same
-guide, flow, and session classes. The Analyze tab reads participation and word
+sessions with participants drawn from the bundled ANES 2024 records, rendered
+from their demographic fields alone or from respondent fields you select. The
+first kind of session uses `run_focus_group()`; the second uses
+respondent-derived agents with the same guide, flow, and session classes. The Analyze tab reads participation and word
 statistics offline. The Continuation experiment fixes the next participant
 speaker and generates one next message under the original history and one under
 a history with an earlier message edited. These paired continuations support a
 comparison of the specified next turn; they do not continue the full session.
 
 Session execution and continuation generation make live model calls. Install
-the suggested `shiny`, `bslib`, `DT`, and `LLMR.shiny` packages before starting
-the interface.
+the suggested `shiny`, `bslib`, `DT`, and `LLMR.shiny` (version 0.1.3 or later)
+packages before starting the interface.
 
 ## Study records, cost, and interpretation
 
-The transcript records each message with its phase and round. Generated rows
-also carry response identifiers, finish reasons, token counts, provider and
-model labels, duration, and failure metadata. Moderator questions and their
-participant responses share a round.
+The transcript records each message with its phase, round, and guide item. A
+generated row also carries what the provider returned about the call, such as
+its response identifier, finish reason, and token counts, together with the
+provider and model that produced it. Moderator questions and their participant
+responses share a round.
+
+The agents see each other as `P1`, `P2`, ... in roster order and the moderator
+as `Moderator`, whatever IDs the roster uses. The transcript keeps the IDs in
+`speaker_id` and the labels the agents saw in `handle`, so agents built
+directly with IDs such as `"teacher_conservative"` or `"V240001"` never see
+those IDs in a prompt. `handles = "ids"` shows the IDs instead, and a vector
+such as `c(teacher_conservative = "Ana")` sets labels of your own. Identifier
+columns (`id`, `caseid`, `respondent_id`, `respid`, `persona_id`, `uid`,
+`record_id`, `row_id`, in any case and with or without separators, as in `ID`
+or `CaseID`) are kept in the roster's `source_ids` and are not rendered into
+personas.
 
 The `participants` component is a data frame. `usage` uses LLMR's `sent`, `rec`,
-and `total` token vocabulary. `metadata` records `topic`, `purpose`, `flow`,
-`message_mode`, `n_participants`, `estimated_calls`, `provider`, and `model`.
-Credentials are never included.
+and `total` token vocabulary, and `unknown` counts the calls whose usage was
+incomplete. A count a provider did not report is unknown rather than zero: it
+is `NA` on the transcript row, and when `unknown` is positive the totals in
+`usage` are lower bounds. `unknown` is `NA` when the number cannot be
+determined, as in a partial result whose last call raised an error. `metadata` records `topic`, `purpose`,
+`flow`, `message_mode`, `n_participants`, `estimated_calls`, `provider`, and
+`model`, followed by `complete` and `failure`, which say whether the session
+finished and, if not, in which phase it stopped. Credentials are never
+included.
 
-Before a live run, `run_focus_group()` estimates the number of model calls. A
-request above `max_calls` stops unless `confirm = TRUE`. Retries and incomplete
-outputs can increase the realized call count.
+If a model call fails partway through a session, `run_focus_group()` raises an
+error of class `focusgroup_incomplete_session`. The error's `partial` field
+holds the result for the turns completed before the failure:
+
+```r
+result <- tryCatch(
+  run_focus_group("Public transit", config = config),
+  focusgroup_incomplete_session = function(e) e$partial
+)
+result$metadata$failure
+```
+
+Before a live run, `run_focus_group()` estimates the number of model outputs
+the session will generate. A run whose estimate exceeds `max_calls` stops
+unless `confirm = TRUE`. The default session of six participants plans at most
+111 outputs, inside the default `max_calls` of 120: 93 for the moderator's
+lines, the replies to them, their desire scores, and the final summary, and 18
+for replies to call-ons, one per participant at each of the three points. The
+realized number of calls can be lower, since the desire-based flow does not
+score the previous speaker, addressed and called-on turns need no scores, and
+only silent participants are called on, or higher, since incomplete replies are
+retried and long discussions are summarized. `final_summary = FALSE` saves the
+summary call.
 
 A generated transcript is evidence about the specified simulation, not a
 population. Interpretation should retain the moderator guide, participant

@@ -104,7 +104,7 @@ test_that("a failed config group is rescored per agent, not left at zero", {
   expect_identical(selected$id, "pb")
 })
 
-test_that("desire broadcasts keep the desire budget and send no temperature", {
+test_that("desire broadcasts keep the desire budget and the configured temperature", {
   skip_if_not_installed("LLMR")
   config <- LLMR::llm_config(
     "openai", "gpt-4o-mini", temperature = 0.25, max_tokens = 77L
@@ -139,9 +139,15 @@ test_that("desire broadcasts keep the desire budget and send no temperature", {
   selected <- flow$select_next_speaker(fg)
   expect_identical(selected$id, "pa")
   # The score is one integer, so desire keeps its own small budget rather than
-  # the caller's prose-sized setting, and no temperature is injected because
-  # some reasoning models require their native value.
+  # the caller's prose-sized setting. The configured temperature is honored.
   expect_identical(seen$max_tokens, 16L)
+  expect_identical(seen$temperature, 0.25)
+
+  # A configuration without a temperature gets none added.
+  plain <- LLMR::llm_config("openai", "gpt-4o-mini")
+  agents <- list(mod = make_agent("mod", plain), pa = make_agent("pa", plain))
+  flow <- create_conversation_flow("desire_based", agents, "mod")
+  flow$select_next_speaker(fg)
   expect_null(seen$temperature)
 })
 
@@ -158,7 +164,7 @@ test_that("the score_per_agent fallback uses each agent's own config (no shared 
                          LLMR::llm_hash(b$config)))
 })
 
-test_that("desire failures are logged and use a neutral participant selection", {
+test_that("desire failures stop the session, or under \"random\" are logged with a neutral selection", {
   config <- LLMR::llm_config("openai", "gpt-4o-mini")
   desire_messages <- character()
   scripted_runner <- function(experiments, ...) {
@@ -183,21 +189,33 @@ test_that("desire failures are logged and use a neutral participant selection", 
     experiments
   }
 
-  result <- withCallingHandlers(
-    run_focus_group(
-      topic = "library hours",
-      n_participants = 2,
-      guide = list(
-        Engagement = "Which library hours matter most?",
-        Closing = "Close the discussion."
-      ),
-      flow = "desire_based",
-      config = config,
-      seed = 110,
-      max_participant_responses = 1,
-      verbose = FALSE,
-      .runner = scripted_runner
+  run <- function(...) run_focus_group(
+    topic = "library hours",
+    n_participants = 2,
+    guide = list(
+      Engagement = "Which library hours matter most?",
+      Closing = "Close the discussion."
     ),
+    flow = "desire_based",
+    config = config,
+    seed = 110,
+    max_participant_responses = 1,
+    verbose = FALSE,
+    call_on_silent = "none",
+    .runner = scripted_runner,
+    ...
+  )
+
+  # The default stops the session; the partial result keeps the question.
+  e <- tryCatch(run(), focusgroup_incomplete_session = identity)
+  expect_s3_class(e, "focusgroup_incomplete_session")
+  expect_s3_class(e$parent, "focusgroup_desire_failure")
+  expect_s3_class(e$parent$parent, "scripted_desire_error")
+  expect_identical(e$phase, "engagement_question")
+  expect_identical(e$partial$transcript$speaker_id, c("System", "MOD"))
+
+  result <- withCallingHandlers(
+    run(on_desire_failure = "random"),
     message = function(message) {
       if (grepl("desire", conditionMessage(message), ignore.case = TRUE)) {
         desire_messages <<- c(desire_messages, conditionMessage(message))
@@ -214,15 +232,16 @@ test_that("desire failures are logged and use a neutral participant selection", 
   expect_true(participant_rows[[1]]$speaker_id %in% c("P1", "P2"))
   expect_true("desire_scoring_failure" %in% names(participant_rows[[1]]$metadata))
   failure <- participant_rows[[1]]$metadata$desire_scoring_failure
-  expect_named(failure, c("reason", "fallback", "candidates"),
+  expect_named(failure, c("reason", "fallback", "candidates", "failed"),
                ignore.order = FALSE)
   expect_match(failure$reason, "provider unavailable")
   expect_identical(failure$fallback, "uniform_random")
   expect_setequal(failure$candidates, c("P1", "P2"))
+  expect_setequal(failure$failed, c("P1", "P2"))
   expect_length(desire_messages, 1L)
 })
 
-test_that("empty desire output is a logged failure and its usage is counted", {
+test_that("empty desire output is a failure and its usage is counted", {
   config <- LLMR::llm_config("openai", "gpt-4o-mini")
   calls <- 0L
   scripted_runner <- function(experiments, ...) {
@@ -247,7 +266,7 @@ test_that("empty desire output is a logged failure and its usage is counted", {
     experiments
   }
 
-  result <- suppressMessages(run_focus_group(
+  run <- function(...) run_focus_group(
     topic = "library hours",
     n_participants = 2,
     guide = list(
@@ -258,8 +277,19 @@ test_that("empty desire output is a logged failure and its usage is counted", {
     config = config,
     max_participant_responses = 1,
     verbose = FALSE,
-    .runner = scripted_runner
-  ))
+    call_on_silent = "none",
+    .runner = scripted_runner,
+    ...
+  )
+  e <- tryCatch(run(), focusgroup_incomplete_session = identity)
+  expect_s3_class(e$parent, "focusgroup_desire_failure")
+  expect_match(conditionMessage(e$parent), "no valid score")
+  # The moderator's question and the first participant's call and retry.
+  expect_identical(e$partial$usage$total, calls * 2)
+  expect_identical(calls, 3L)
+
+  calls <- 0L
+  result <- suppressMessages(run(on_desire_failure = "random"))
 
   participant_row <- Filter(
     function(row) row$speaker_id %in% c("P1", "P2"),
@@ -269,4 +299,49 @@ test_that("empty desire output is a logged failure and its usage is counted", {
   expect_match(failure$reason, "no valid score")
   expect_identical(failure$fallback, "uniform_random")
   expect_identical(result$usage$total, calls * 2)
+})
+
+# A live call that goes through a retry: LLMR waits a jittered time before
+# trying again, a draw from the random-number stream. `retry_at` names the
+# calls, of each kind, that retry once.
+.fl_retry_session <- function(flow, retry_at = integer(), broadcast_retry_at = integer(),
+                              seed = 42) {
+  count <- 0L
+  broadcasts <- 0L
+  testthat::local_mocked_bindings(
+    call_llm_robust = function(config, messages, ...) {
+      count <<- count + 1L
+      if (count %in% retry_at) stats::runif(1)
+      data.frame(response_text = "Evening hours matter because people work days.",
+                 sent = 0, rec = 0)
+    },
+    call_llm_broadcast = function(config, messages, ...) {
+      broadcasts <<- broadcasts + 1L
+      if (broadcasts %in% broadcast_retry_at) stats::runif(1)
+      data.frame(response_text = rep("8", length(messages)), success = TRUE,
+                 sent = 0, rec = 0)
+    }, .package = "LLMR")
+  result <- run_focus_group(
+    "library hours", LLMR::llm_config("openai", "example-model"), n_participants = 4,
+    guide = list(Engagement = c("Which hours matter?", "Who is left out?"),
+                 Closing = "Close the session."),
+    flow = flow, seed = seed, max_participant_responses = 3, call_on_silent = "none",
+    final_summary = FALSE, verbose = FALSE)
+  result$routing$selected_id
+}
+
+test_that("a provider retry leaves later speaker draws as they were", {
+  plain <- .fl_retry_session("probabilistic")
+  expect_length(plain, 6L)
+  expect_identical(.fl_retry_session("probabilistic", retry_at = 2L), plain)
+  expect_identical(.fl_retry_session("probabilistic", retry_at = c(2L, 5L)), plain)
+  # Hard negative: the flow still draws from the stream, so another seed
+  # gives another sequence.
+  expect_false(identical(.fl_retry_session("probabilistic", seed = 43), plain))
+
+  # Desire scores broadcast in one call per pick; every score ties, so the
+  # pick is drawn at random.
+  tied <- .fl_retry_session("desire_based")
+  expect_identical(.fl_retry_session("desire_based", broadcast_retry_at = 1L), tied)
+  expect_false(identical(.fl_retry_session("desire_based", seed = 43), tied))
 })

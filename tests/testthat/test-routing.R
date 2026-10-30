@@ -1,0 +1,299 @@
+# Who gets the floor: the previous-speaker exclusion lasts only until the
+# moderator speaks, and a moderator line that names one participant gives
+# that participant the next turn. Offline, with scripted runners.
+
+.rt_config <- function() LLMR::llm_config("openai", "example-model")
+
+.rt_prompt <- function(messages) {
+  paste(vapply(messages, function(m) as.character(m$content %||% ""),
+               character(1)), collapse = "\n")
+}
+
+# Desire scores by persona: "Persona one." scores `top`, everyone else 2.
+.rt_runner <- function(top = "9", moderator = NULL) {
+  env <- new.env()
+  env$n <- 0L
+  env$runner <- function(experiments, ...) {
+    env$n <- env$n + 1L
+    messages <- experiments$messages[[1]]
+    prompt <- .rt_prompt(messages)
+    experiments$response_text <- if (grepl("Desire to talk score", prompt, fixed = TRUE)) {
+      if (grepl("Persona one", messages[[1]]$content, fixed = TRUE)) top else "2"
+    } else if (grepl("Summary:$", prompt)) {
+      "A short summary."
+    } else if (!is.null(moderator) && grepl("MODERATOR", prompt, fixed = TRUE)) {
+      moderator
+    } else {
+      sprintf("Reply %03d: evening hours matter to working families.", env$n)
+    }
+    experiments
+  }
+  env
+}
+
+.rt_group <- function(runner, script, flow = "desire_based", responses = 1L, ...) {
+  agents <- create_agents(3, config = .rt_config(),
+                          direct_persona_descriptions = c("Persona one.", "Persona two.",
+                                                          "Persona three."),
+                          .runner = runner)
+  FocusGroup$new(
+    topic = "library hours", purpose = "Test.", agents = agents, moderator_id = "MOD",
+    turn_taking_flow = create_conversation_flow(flow, agents, "MOD"),
+    question_script = script, max_participant_responses = responses, ...)
+}
+
+test_that("the participant who closed one question may open the next", {
+  stub <- .rt_runner()
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?"),
+    list(phase = "engagement_question", text = "Who is left out?"),
+    list(phase = "exploration_question", text = "What would you change?")),
+    call_on_silent = "none")
+  fg$run_simulation()
+  routing <- fg$records$routing
+  # P1 has the highest desire score throughout and answers every question:
+  # the moderator's line between questions ends the exclusion.
+  expect_identical(vapply(routing, `[[`, character(1), "selected_id"),
+                   c("P1", "P1", "P1"))
+  expect_true(all(lengths(lapply(routing, `[[`, "excluded")) == 0L))
+  expect_true(all(vapply(routing, function(r) length(r$scores) == 3L, logical(1))))
+
+  # Within a question the exclusion still bars back-to-back turns.
+  stub <- .rt_runner()
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?")),
+    responses = 2L, call_on_silent = "none")
+  fg$run_simulation()
+  second <- fg$records$routing[[2]]
+  expect_identical(second$excluded, c(P1 = "previous_speaker"))
+  expect_false(identical(second$selected_id, "P1"))
+})
+
+test_that("a flow without note_moderator_turn() still runs", {
+  OldFlow <- R6::R6Class("OldFlow", public = list(
+    agents = NULL, participant_ids = NULL, last_speaker_id = NULL,
+    initialize = function(agents) {
+      self$agents <- agents
+      self$participant_ids <- setdiff(names(agents), "MOD")
+    },
+    select_next_speaker = function(focus_group) self$agents[[self$participant_ids[[1]]]],
+    update_state_post_selection = function(speaker_id, focus_group) {
+      self$last_speaker_id <- speaker_id
+    }))
+  stub <- .rt_runner()
+  agents <- create_agents(2, config = .rt_config(),
+                          direct_persona_descriptions = c("A.", "B."),
+                          .runner = stub$runner)
+  flow <- OldFlow$new(agents)
+  class(flow) <- c("OldFlow", "ConversationFlow", class(flow))
+  fg <- FocusGroup$new(
+    topic = "library hours", purpose = "Test.", agents = agents, moderator_id = "MOD",
+    turn_taking_flow = flow,
+    question_script = list(list(phase = "engagement_question", text = "Q?")),
+    max_participant_responses = 1, call_on_silent = "none")
+  fg$run_simulation()
+  expect_identical(flow$last_speaker_id, "P1")
+})
+
+test_that("the addressee is the one participant the last question opens or closes with", {
+  handles <- stats::setNames(paste0("P", 1:10), paste0("id", 1:10))
+  addressee <- function(text) FocusGroup:::.fg_addressee(text, handles)
+  positives <- c(
+    "Thanks, P2. P3, do you agree?" = "id3",
+    "Could you say more, P4?" = "id4",
+    "P10, what would you change first?" = "id10",
+    "Thanks, P10. What do you think, P1?" = "id1",
+    "**P5**, could you give an example?" = "id5",
+    "That is a strong point.\n\nP6, how does it look from where you sit?" = "id6",
+    # Another participant may be named inside the question.
+    "Thanks, P2. P4, what are your thoughts on what P2 just shared?" = "id4",
+    "P4, do you agree with P2?" = "id4",
+    "What do you make of P2's point, P4?" = "id4",
+    "__P7__, could you say more?" = "id7",
+    # A handle and a colon, and short follow-ups that name one handle.
+    "P2: what do you think?" = "id2",
+    "Thanks. **P2:** what do you think of that?" = "id2",
+    "P2: do you agree with P3?" = "id2",
+    "Thanks, P4. And P3?" = "id3",
+    "What about P3?" = "id3",
+    "How about P3?" = "id3",
+    "And what about P10?" = "id10",
+    "That helps. what about P5 ?" = "id5")
+  for (text in names(positives)) {
+    expect_identical(addressee(text), positives[[text]], info = text)
+  }
+  negatives <- c(
+    "As P2 said, what do others think?",
+    "P2, P3, and P5 all mentioned cost. What does everyone think?",
+    "Does anyone agree with P2?",
+    "What do you think, P2 and P3?",
+    "P3, do you and the rest of the group agree?",
+    "P3, could you say more? What led you there?",
+    "What did P3 mean by that?",
+    "P3 made a point about cost. What do you think?",
+    "P3, thank you for that.",
+    "Thank you, P3.",
+    "What do you think, P30?",
+    "P1, P2, what do you both think?",
+    "Welcome, everyone. P4, what do all of you think?",
+    "P2, who else shares that view?",
+    "P2, does someone else want to respond?",
+    "P2, could any of you build on that?",
+    "P2, what do the other participants think?",
+    "P2, what do each of you think?",
+    "P2, do you both agree?",
+    "What do you think, P2, P3?",
+    "P4, what do you make of P2's point, P3?",
+    # A recap that quotes participants, and follow-ups that name more than
+    # one participant or name a participant's point.
+    "P2: I agree.",
+    "To recap. P2: I agree with longer evenings. P3: mornings work better.",
+    "P2: evenings. P3: mornings. Which matters more?",
+    "P2: evenings, P3: mornings?",
+    "P2: what do you make of that, P3?",
+    "P2: P3, what do you think?",
+    "What about P3's point?",
+    "And P3's view?",
+    "How about P3 and P4?",
+    "What about P3, P4?",
+    "And P30?",
+    "What about everyone else?",
+    "And the rest of you, P3?",
+    "")
+  for (text in negatives) {
+    expect_identical(addressee(text), NA_character_, info = text)
+  }
+  expect_identical(FocusGroup:::.fg_addressee("P3, do you agree?", character()), NA_character_)
+  expect_identical(FocusGroup:::.fg_addressee(NA_character_, handles), NA_character_)
+  # Handles of any form match only themselves.
+  named <- c(a = "Ana", b = "Anabel", c = "J.R.", d = "nurse_lib")
+  expect_identical(FocusGroup:::.fg_addressee("nurse_lib, could you say more?", named), "d")
+  expect_identical(FocusGroup:::.fg_addressee("What do you think, nurse_lib?", named), "d")
+  expect_identical(FocusGroup:::.fg_addressee("nurselib, could you say more?", named), NA_character_)
+  expect_identical(FocusGroup:::.fg_addressee("Anabel, do you agree?", named), "b")
+  expect_identical(FocusGroup:::.fg_addressee("Could you say more, J.R.?", named), "c")
+  expect_identical(FocusGroup:::.fg_addressee("Could you say more, JxR.?", named), NA_character_)
+})
+
+test_that("a moderator line that addresses a participant gives that participant the next turn", {
+  addressed_line <- "Thank you all for joining. P3, what do you think about evening hours?"
+  stub <- .rt_runner(top = "9", moderator = addressed_line)
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?")),
+    responses = 2L, call_on_silent = "none")
+  fg$run_simulation()
+  log <- fg$conversation_log
+  routing <- fg$records$routing
+  question <- log[[2]]
+  expect_identical(question$text, addressed_line)
+  # P3 answers although P1 holds the highest desire score; then the flow
+  # chooses again.
+  expect_identical(vapply(routing, `[[`, character(1), "rule"),
+                   c("addressed", "highest_score"))
+  expect_identical(vapply(routing, `[[`, character(1), "selected_id"), c("P3", "P1"))
+  expect_identical(routing[[1]]$trigger_message_id, question$message_id)
+  expect_null(routing[[1]]$scores)
+  expect_true(is.na(routing[[2]]$trigger_message_id))
+  expect_true(log[[3]]$metadata$addressed)
+  expect_identical(log[[3]]$speaker_id, "P3")
+  # No desire score was asked for the addressed turn.
+  calls <- fg$records$calls
+  types <- vapply(calls, `[[`, character(1), "call_type")
+  expect_identical(sum(types == "desire"), 2L)
+
+  # A line that also asks the group leaves the choice to the flow.
+  stub <- .rt_runner(top = "9", moderator = "P3, what does everyone think?")
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?")),
+    call_on_silent = "none")
+  fg$run_simulation()
+  expect_identical(fg$records$routing[[1]]$rule, "highest_score")
+  expect_identical(fg$records$routing[[1]]$selected_id, "P1")
+})
+
+test_that("an addressed turn's instruction says the question was put to it, in both modes", {
+  addressed <- "The moderator's last question was put to you directly."
+  called <- "The moderator has asked you directly for your view."
+  for (mode in c("roleflip", "flat")) {
+    withr::local_options(list(focusgroup.message_mode = mode))
+    stub <- .rt_runner(top = "9", moderator = "Thanks. P3, what do you think about the hours?")
+    fg <- .rt_group(stub$runner, list(
+      list(phase = "engagement_question", text = "Which hours matter?")),
+      responses = 2L, call_on_silent = "none")
+    fg$run_simulation(final_summary = FALSE)
+    participant <- Filter(function(call) identical(call$call_type, "participant"),
+                          fg$records$calls)
+    last <- vapply(participant, function(call) {
+      as.character(call$messages[[length(call$messages)]]$content)
+    }, character(1))
+    rules <- vapply(fg$records$routing, `[[`, character(1), "rule")
+    expect_identical(rules, c("addressed", "highest_score"), info = mode)
+    # The cue closes the addressed turn's instruction and no other's.
+    expect_true(endsWith(last[[1]], paste0("\n", addressed)), info = mode)
+    expect_false(grepl(addressed, last[[2]], fixed = TRUE), info = mode)
+    expect_false(any(grepl(called, last, fixed = TRUE)), info = mode)
+  }
+
+  # Hard negative: a called-on turn keeps its own cue and gets no other.
+  stub <- .rt_runner(top = "9")
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?")),
+    responses = 1L, call_on_silent = 1L)
+  fg$run_simulation(final_summary = FALSE)
+  participant <- Filter(function(call) identical(call$call_type, "participant"),
+                        fg$records$calls)
+  last <- vapply(participant, function(call) {
+    as.character(call$messages[[length(call$messages)]]$content)
+  }, character(1))
+  rules <- vapply(fg$records$routing, `[[`, character(1), "rule")
+  expect_identical(rules, c("highest_score", "called_on", "called_on"))
+  expect_identical(grepl(called, last, fixed = TRUE), c(FALSE, TRUE, TRUE))
+  expect_false(any(grepl(addressed, last, fixed = TRUE)))
+})
+
+test_that("an injected moderator line can address a participant", {
+  stub <- .rt_runner(top = "9")
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?")),
+    responses = 2L, call_on_silent = "none")
+  fg$run_simulation(injections = fg_injection("Could you take this one, P2?",
+                                              at = fg_before_turn(2)))
+  routing <- fg$records$routing
+  expect_identical(vapply(routing, `[[`, character(1), "selected_id"), c("P1", "P2"))
+  expect_identical(routing[[2]]$rule, "addressed")
+  injected <- Filter(function(m) isTRUE(m$metadata$injected), fg$conversation_log)[[1]]
+  expect_identical(routing[[2]]$trigger_message_id, injected$message_id)
+})
+
+test_that("the moderator prompts no longer name a participant by roster order", {
+  templates <- get_default_prompt_templates()
+  expect_false(grepl("other_participant_id_placeholder", templates$moderator_probing_focused,
+                     fixed = TRUE))
+  expect_match(templates$moderator_probing_focused, "another participant", fixed = TRUE)
+  expect_false(grepl("participant ID", templates$moderator_opening, fixed = TRUE))
+})
+
+test_that("round robin passes over a participant who has just answered the moderator", {
+  stub <- .rt_runner(moderator = "Thank you. What led you there, P1?")
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?"),
+    list(phase = "engagement_question", text = "Who is left out?")),
+    flow = "round_robin", responses = 2L, call_on_silent = "none")
+  fg$run_simulation()
+  routing <- fg$records$routing
+  expect_identical(vapply(routing, `[[`, character(1), "selected_id"),
+                   c("P1", "P2", "P1", "P3"))
+  expect_identical(vapply(routing, `[[`, character(1), "rule"),
+                   c("addressed", "rotation", "addressed", "rotation"))
+  expect_identical(routing[[2]]$excluded, c(P1 = "previous_speaker"))
+  expect_length(routing[[4]]$excluded, 0L)
+  # Without turns given by the moderator, the rotation is unchanged.
+  stub <- .rt_runner()
+  fg <- .rt_group(stub$runner, list(
+    list(phase = "engagement_question", text = "Which hours matter?"),
+    list(phase = "engagement_question", text = "Who is left out?")),
+    flow = "round_robin", responses = 2L, call_on_silent = "none")
+  fg$run_simulation()
+  expect_identical(vapply(fg$records$routing, `[[`, character(1), "selected_id"),
+                   c("P1", "P2", "P3", "P1"))
+})
